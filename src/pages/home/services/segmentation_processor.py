@@ -69,8 +69,8 @@ class SegmentationThread(QThread):
         # Get original dimensions
         orig_h, orig_w = image.shape[:2]
         
-        # Preprocess image
-        input_tensor = self.preprocess(image)
+        # Preprocess image - LƯU LẠI scale và padding
+        input_tensor, scale, pad_w, pad_h = self.preprocess(image)
         
         # Get input name
         input_name = self.session.get_inputs()[0].name
@@ -78,19 +78,32 @@ class SegmentationThread(QThread):
         # Run inference
         outputs = self.session.run(None, {input_name: input_tensor})
         
-        # Postprocess output
-        result = self.postprocess(outputs, orig_h, orig_w)
+        # Postprocess output - truyền scale và padding từ preprocess
+        result = self.postprocess(outputs, image, orig_h, orig_w, scale, pad_w, pad_h)
         
         return result
     
-    def preprocess(self, image: np.ndarray) -> np.ndarray:
-        """Preprocess image cho ONNX model"""
-        # Resize to model input size (typically 640x640 for YOLOv8)
+    def preprocess(self, image: np.ndarray) -> tuple:
+        """Preprocess image cho ONNX model - TRẢ VỀ cả scale và padding"""
         input_size = 640
-        resized = cv2.resize(image, (input_size, input_size))
+        orig_h, orig_w = image.shape[:2]
+        
+        # Tính scale (giữ nguyên tỷ lệ)
+        scale = min(input_size / orig_w, input_size / orig_h)
+        new_w = int(orig_w * scale)
+        new_h = int(orig_h * scale)
+        
+        # Resize ảnh
+        resized = cv2.resize(image, (new_w, new_h))
+        
+        # Tạo canvas với padding (letterbox)
+        canvas = np.full((input_size, input_size, 3), 114, dtype=np.uint8)
+        pad_w = (input_size - new_w) // 2
+        pad_h = (input_size - new_h) // 2
+        canvas[pad_h:pad_h+new_h, pad_w:pad_w+new_w] = resized
         
         # Convert BGR to RGB
-        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        rgb = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
         
         # Normalize to [0, 1]
         normalized = rgb.astype(np.float32) / 255.0
@@ -101,10 +114,10 @@ class SegmentationThread(QThread):
         # Add batch dimension
         batched = np.expand_dims(transposed, axis=0)
         
-        return batched
+        return batched, scale, pad_w, pad_h
     
-    def postprocess(self, outputs: List[np.ndarray], orig_h: int, orig_w: int) -> np.ndarray:
-        """Postprocess ONNX output thành segmentation mask với colored overlay - Instance Segmentation đúng chuẩn YOLOv8"""
+    def postprocess(self, outputs: List[np.ndarray], original_image: np.ndarray, orig_h: int, orig_w: int, scale: float, pad_w: int, pad_h: int) -> np.ndarray:
+        """Postprocess ONNX output - Vẽ outline trên ảnh gốc"""
         try:
             # YOLOv8 segmentation output:
             # outputs[0]: detection output (1, 37, 8400) - [x, y, w, h, class_score, mask_coeffs...]
@@ -112,7 +125,8 @@ class SegmentationThread(QThread):
             
             if len(outputs) < 2:
                 self.logger.warning("Insufficient outputs from model")
-                return np.zeros((orig_h, orig_w, 3), dtype=np.uint8)
+                # Trả về ảnh gốc nếu không có output
+                return cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
             
             boxes_output = outputs[0]  # (1, 37, 8400)
             masks_output = outputs[1]  # (1, 32, 160, 160)
@@ -132,7 +146,8 @@ class SegmentationThread(QThread):
             
             if not np.any(valid_mask):
                 self.logger.info("No detections above confidence threshold")
-                return np.zeros((orig_h, orig_w, 3), dtype=np.uint8)
+                # Trả về ảnh gốc
+                return cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
             
             valid_boxes = boxes[valid_mask]               # (N, 4)
             valid_scores = class_scores[valid_mask]       # (N, 1)
@@ -143,7 +158,8 @@ class SegmentationThread(QThread):
             
             if len(nms_indices) == 0:
                 self.logger.info("No detections after NMS")
-                return np.zeros((orig_h, orig_w, 3), dtype=np.uint8)
+                # Trả về ảnh gốc
+                return cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
             
             final_boxes = valid_boxes[nms_indices]         # (M, 4)
             final_mask_coeffs = valid_mask_coeffs[nms_indices]  # (M, 32)
@@ -157,15 +173,11 @@ class SegmentationThread(QThread):
             
             # Tạo combined mask tổng hợp tất cả instances
             combined_mask = np.zeros((orig_h, orig_w), dtype=np.float32)
-            
-            # Tính scale và padding từ preprocess
-            # Input size = 640x640
-            input_size = 640
-            scale = min(input_size / orig_w, input_size / orig_h)
+
+            # SỬ DỤNG scale và padding đã được truyền từ preprocess
+            # Tính lại kích thước ảnh sau resize (trước khi pad)
             new_w = int(orig_w * scale)
             new_h = int(orig_h * scale)
-            pad_w = (input_size - new_w) // 2
-            pad_h = (input_size - new_h) // 2
             
             for box, coeffs in zip(final_boxes, final_mask_coeffs):
                 # Tính mask logits: mask_coeffs @ mask_protos
@@ -209,17 +221,32 @@ class SegmentationThread(QThread):
             # Chuyển sang binary mask
             final_mask = (combined_mask > 0.5).astype(np.uint8)
             
-            # Tạo colored overlay (màu xanh lá cho speech balloons)
-            colored_mask = np.zeros((orig_h, orig_w, 3), dtype=np.uint8)
-            colored_mask[final_mask > 0] = [0, 255, 0]  # Green color (RGB)
+            # ========== VẼ OUTLINE TRÊN ẢNH GỐC ==========
+            # Chuyển ảnh gốc sang RGB để hiển thị
+            result_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
             
-            return colored_mask
+            # Tìm contours từ mask
+            contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            if len(contours) > 0:
+                # Vẽ contours với màu xanh lá, độ dày 3 pixel
+                cv2.drawContours(result_image, contours, -1, (0, 255, 0), thickness=3)
+                
+                # Optional: Vẽ thêm contour bên trong để tạo hiệu ứng viền đậm hơn
+                cv2.drawContours(result_image, contours, -1, (0, 200, 0), thickness=1)
+                
+                self.logger.info(f"Drew {len(contours)} contours on image")
+            else:
+                self.logger.warning("No contours found in mask")
+            
+            return result_image
             
         except Exception as e:
             self.logger.error(f"Error in postprocessing: {e}")
             import traceback
             traceback.print_exc()
-            return np.zeros((orig_h, orig_w, 3), dtype=np.uint8)
+            # Trả về ảnh gốc nếu có lỗi
+            return cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
     
     def _apply_nms(self, boxes, scores, iou_threshold=0.45):
         """
