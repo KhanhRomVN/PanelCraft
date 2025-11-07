@@ -221,12 +221,12 @@ class SegmentationThread(QThread):
             # Chuyển sang binary mask
             final_mask = (combined_mask > 0.5).astype(np.uint8)
             
-            # ========== VẼ OUTLINE TRÊN ẢNH GỐC ==========
+            # ========== VẼ OUTLINE VÀ RECTANGLE TRÊN ẢNH GỐC ==========
             # Chuyển ảnh gốc sang RGB để hiển thị
             result_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
             
             # Tìm contours từ mask
-            contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            contours, hierarchy = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             
             if len(contours) > 0:
                 # Vẽ contours với màu xanh lá, độ dày 3 pixel
@@ -236,6 +236,21 @@ class SegmentationThread(QThread):
                 cv2.drawContours(result_image, contours, -1, (0, 200, 0), thickness=1)
                 
                 self.logger.info(f"Drew {len(contours)} contours on image")
+                
+                # ========== VẼ HÌNH CHỮ NHẬT LỚN NHẤT BÊN TRONG MỖI BUBBLE ==========
+                for contour in contours:
+                    # Tạo mask riêng cho contour này
+                    single_mask = np.zeros_like(final_mask)
+                    cv2.drawContours(single_mask, [contour], -1, 1, -1)
+                    
+                    # Tìm hình chữ nhật lớn nhất bên trong
+                    rect = self._find_largest_inscribed_rectangle(single_mask)
+                    
+                    if rect is not None:
+                        x, y, w, h = rect
+                        # Vẽ hình chữ nhật màu đỏ, độ dày 2 pixel
+                        cv2.rectangle(result_image, (x, y), (x + w, y + h), (255, 0, 0), thickness=2)
+                        self.logger.info(f"Drew rectangle: x={x}, y={y}, w={w}, h={h}, area={w*h}")
             else:
                 self.logger.warning("No contours found in mask")
             
@@ -305,6 +320,138 @@ class SegmentationThread(QThread):
             order = order[inds + 1]
         
         return keep
+    
+    def _find_largest_inscribed_rectangle(self, mask: np.ndarray) -> tuple:
+        """
+        Tìm hình chữ nhật nội tiếp có diện tích lớn nhất trong mask
+        Sử dụng Distance Transform + Dynamic Programming
+        
+        Args:
+            mask: Binary mask (np.uint8) - 1 cho vùng object, 0 cho background
+        
+        Returns:
+            tuple: (x, y, width, height) hoặc None nếu không tìm thấy
+        """
+        if mask.sum() == 0:
+            return None
+        
+        # Tính Distance Transform
+        dist_transform = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
+        
+        # Tìm bounding box của contour để giới hạn vùng tìm kiếm
+        coords = np.column_stack(np.where(mask > 0))
+        if len(coords) == 0:
+            return None
+        
+        y_min, x_min = coords.min(axis=0)
+        y_max, x_max = coords.max(axis=0)
+        
+        # Crop mask và distance transform để tối ưu tốc độ
+        mask_crop = mask[y_min:y_max+1, x_min:x_max+1]
+        dist_crop = dist_transform[y_min:y_max+1, x_min:x_max+1]
+        
+        h, w = mask_crop.shape
+        
+        # Largest Rectangle in Histogram algorithm
+        max_area = 0
+        best_rect = None
+        
+        # Tạo height histogram
+        height_map = np.zeros((h, w), dtype=np.int32)
+        
+        for i in range(h):
+            for j in range(w):
+                if mask_crop[i, j] > 0:
+                    if i == 0:
+                        height_map[i, j] = 1
+                    else:
+                        height_map[i, j] = height_map[i-1, j] + 1
+                else:
+                    height_map[i, j] = 0
+        
+        # Với mỗi hàng, tìm largest rectangle trong histogram
+        for i in range(h):
+            histogram = height_map[i, :]
+            rect = self._largest_rectangle_in_histogram(histogram, i)
+            
+            if rect is not None:
+                x, y, rw, rh = rect
+                area = rw * rh
+                
+                # Kiểm tra xem rectangle có nằm hoàn toàn trong mask không
+                if self._is_rectangle_inside_mask(mask_crop, x, y, rw, rh):
+                    if area > max_area:
+                        max_area = area
+                        # Chuyển tọa độ về ảnh gốc
+                        best_rect = (x + x_min, y + y_min, rw, rh)
+        
+        return best_rect
+    
+    def _largest_rectangle_in_histogram(self, histogram: np.ndarray, row_index: int) -> tuple:
+        """
+        Tìm hình chữ nhật lớn nhất trong histogram
+        
+        Args:
+            histogram: Array of heights
+            row_index: Index của hàng hiện tại
+        
+        Returns:
+            tuple: (x, y, width, height) hoặc None
+        """
+        stack = []
+        max_area = 0
+        best_rect = None
+        index = 0
+        
+        while index < len(histogram):
+            if not stack or histogram[index] >= histogram[stack[-1]]:
+                stack.append(index)
+                index += 1
+            else:
+                top = stack.pop()
+                height = histogram[top]
+                width = index if not stack else index - stack[-1] - 1
+                area = height * width
+                
+                if area > max_area:
+                    max_area = area
+                    x = stack[-1] + 1 if stack else 0
+                    y = row_index - height + 1
+                    best_rect = (x, y, width, height)
+        
+        while stack:
+            top = stack.pop()
+            height = histogram[top]
+            width = index if not stack else index - stack[-1] - 1
+            area = height * width
+            
+            if area > max_area:
+                max_area = area
+                x = stack[-1] + 1 if stack else 0
+                y = row_index - height + 1
+                best_rect = (x, y, width, height)
+        
+        return best_rect
+    
+    def _is_rectangle_inside_mask(self, mask: np.ndarray, x: int, y: int, width: int, height: int) -> bool:
+        """
+        Kiểm tra xem hình chữ nhật có nằm hoàn toàn bên trong mask không
+        
+        Args:
+            mask: Binary mask
+            x, y, width, height: Rectangle parameters
+        
+        Returns:
+            bool: True nếu rectangle nằm hoàn toàn trong mask
+        """
+        if x < 0 or y < 0 or x + width > mask.shape[1] or y + height > mask.shape[0]:
+            return False
+        
+        # Lấy vùng rectangle từ mask
+        rect_region = mask[y:y+height, x:x+width]
+        
+        # Kiểm tra xem tất cả pixel trong rectangle có thuộc mask không
+        return np.all(rect_region > 0)
     
     def numpy_to_qimage(self, image: np.ndarray) -> QImage:
         """Convert numpy array to QImage"""
