@@ -27,8 +27,8 @@ class CustomModal(QDialog):
         self.setup_connections()
         
         # Dialog properties
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
         self.setModal(True)
-        self.setWindowFlags(Qt.Modal | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         
     def setup_ui(self):

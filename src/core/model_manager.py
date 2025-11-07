@@ -137,8 +137,8 @@ class ModelManager(QObject):
         ),
         ModelInfo(
             name="YOLOv8 Bubble Segmentation Model",
-            url="https://huggingface.co/kitsumed/yolov8m_seg-speech-bubble/resolve/main/model_dynamic.onnx",
-            filename="model_dynamic.onnx",
+            url="https://huggingface.co/khanhromvn/Bubble/resolve/main/yolov8_converted.onnx",
+            filename="yolov8_converted.onnx",
             category="segmentation",
             size_mb=52.0
         ),
