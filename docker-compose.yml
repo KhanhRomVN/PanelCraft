@@ -1,0 +1,13 @@
+version: '3.8'
+services:
+  sylva:
+    container_name: sylva_identity
+    image: sylva/sylva:latest
+    volumes:
+      - sylva_data:/app/data
+    stdin_open: true
+    tty: true
+    command: interactive # hoặc search / config tùy nhu cầu
+
+volumes:
+  sylva_data:
