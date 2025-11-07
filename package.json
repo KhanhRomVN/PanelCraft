@@ -1,11 +1,9 @@
 {
-  "name": "updaterCacheDirName: panelcraft-updater
-",
+  "name": "panelcraft",
   "version": "1.0.1",
-  "description": "An Electron application with React and TypeScript",
+  "description": "",
   "main": "./out/main/index.js",
-  "author": "com.khanhromvn.updaterCacheDirName: panelcraft-updater
-",
+  "author": "com.khanhromvn.panelcraft",
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",
@@ -93,6 +91,7 @@
     "idb": "^8.0.3",
     "lucide-react": "^0.294.0",
     "monaco-editor": "^0.53.0",
+    "onnxruntime-web": "^1.23.2",
     "otplib": "^12.0.1",
     "pg": "^8.16.3",
     "postcss": "^8.4.32",

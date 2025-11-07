@@ -1,20 +1,250 @@
 import * as dotenv from 'dotenv'
 dotenv.config()
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import * as fs from 'fs'
 import * as path from 'path'
-import { Pool } from 'pg'
+import { protocol } from 'electron'
 
 let mainWindow: BrowserWindow | null = null
-let cloudDbPool: Pool | null = null
-let isCloudDbConnected: boolean = false // ✅ Track connection state
 
 // Storage file path
 const getStorageFilePath = () => {
   const userDataPath = app.getPath('userData')
   return path.join(userDataPath, 'email-manager-config.json')
+}
+
+// Register custom protocol for loading local images
+function registerLocalImageProtocol(): void {
+  protocol.registerFileProtocol('local-image', (request, callback) => {
+    const url = request.url.replace('local-image://', '')
+    const decodedPath = decodeURIComponent(url)
+    callback({ path: decodedPath })
+  })
+}
+
+function registerLocalResourceProtocol(): void {
+  protocol.registerFileProtocol('local-resource', (request, callback) => {
+    const url = request.url.replace('local-resource://', '')
+    const decodedPath = decodeURIComponent(url)
+
+    let mimeType = 'application/octet-stream'
+    if (decodedPath.endsWith('.wasm')) {
+      mimeType = 'application/wasm'
+    } else if (decodedPath.endsWith('.onnx')) {
+      mimeType = 'application/octet-stream'
+    }
+
+    callback({
+      path: decodedPath,
+      headers: {
+        'Content-Type': mimeType
+      }
+    })
+  })
+}
+// Setup IPC handlers for model operations
+function setupModelHandlers() {
+  const https = require('https')
+  const http = require('http')
+
+  // Check if model exists
+  ipcMain.handle('model:check', async (_event, modelId: string, customPath?: string) => {
+    try {
+      const basePath = customPath || app.getPath('userData')
+      const modelPath = path.join(basePath, 'models', modelId)
+
+      console.log('[model:check] Checking path:', modelPath)
+      console.log('[model:check] Custom path:', customPath)
+      console.log('[model:check] Base path:', basePath)
+
+      if (!fs.existsSync(modelPath)) {
+        console.log('[model:check] Path does not exist')
+        return { exists: false, files: [] }
+      }
+
+      const allFiles = fs.readdirSync(modelPath)
+      const files = allFiles.filter((file) => !file.startsWith('.'))
+      console.log('[model:check] Found files:', files)
+      console.log('[model:check] All files (including hidden):', allFiles)
+      return { exists: files.length > 0, files }
+    } catch (error) {
+      console.error('[model:check] Error:', error)
+      return { exists: false, files: [] }
+    }
+  })
+
+  // Download model file
+  ipcMain.handle(
+    'model:download',
+    async (
+      event,
+      params: {
+        modelId: string
+        fileName: string
+        url: string
+        localPath: string
+        customBasePath?: string
+      }
+    ) => {
+      try {
+        const basePath = params.customBasePath || app.getPath('userData')
+        const modelDir = path.join(basePath, 'models', params.modelId)
+        const filePath = path.join(modelDir, params.fileName)
+
+        console.log('[model:download] ==================')
+        console.log('[model:download] Base path:', basePath)
+        console.log('[model:download] Model ID:', params.modelId)
+        console.log('[model:download] Target directory:', modelDir)
+        console.log('[model:download] File path:', filePath)
+        console.log('[model:download] Download URL:', params.url)
+
+        if (!fs.existsSync(modelDir)) {
+          console.log('[model:download] Creating directory:', modelDir)
+          fs.mkdirSync(modelDir, { recursive: true })
+        }
+
+        const protocol = params.url.startsWith('https') ? https : http
+
+        return new Promise((resolve, reject) => {
+          const request = protocol.get(params.url, (response) => {
+            if (response.statusCode === 302 || response.statusCode === 301) {
+              console.log('[model:download] Following redirect to:', response.headers.location)
+              const redirectProtocol = response.headers.location?.startsWith('https') ? https : http
+              redirectProtocol
+                .get(response.headers.location!, (redirectResponse) => {
+                  handleDownloadResponse(redirectResponse, filePath, event, params, resolve, reject)
+                })
+                .on('error', (error) => {
+                  console.error('[model:download] Redirect request error:', error.message)
+                  reject(error)
+                })
+              return
+            }
+
+            handleDownloadResponse(response, filePath, event, params, resolve, reject)
+          })
+
+          request.on('error', (error) => {
+            console.error('[model:download] Request error:', error.message)
+            fs.unlink(filePath, () => {})
+            resolve({
+              success: false,
+              error: error.message
+            })
+          })
+
+          request.setTimeout(300000, () => {
+            request.destroy()
+            fs.unlink(filePath, () => {})
+            resolve({
+              success: false,
+              error: 'Download timeout (5 minutes)'
+            })
+          })
+        })
+
+        function handleDownloadResponse(
+          response: any,
+          filePath: string,
+          event: any,
+          params: any,
+          resolve: any,
+          reject: any
+        ) {
+          const totalSize = parseInt(response.headers['content-length'] || '0', 10)
+          let downloadedSize = 0
+          let lastProgressUpdate = Date.now()
+
+          console.log('[model:download] Total size:', totalSize, 'bytes')
+
+          const file = fs.createWriteStream(filePath)
+
+          response.on('data', (chunk: Buffer) => {
+            downloadedSize += chunk.length
+
+            const now = Date.now()
+            if (now - lastProgressUpdate > 500 || downloadedSize === totalSize) {
+              const percentage = totalSize > 0 ? Math.round((downloadedSize / totalSize) * 100) : 0
+              console.log(
+                `[model:download] Progress: ${percentage}% (${downloadedSize}/${totalSize} bytes)`
+              )
+
+              event.sender.send('model:download-progress', {
+                modelId: params.modelId,
+                fileName: params.fileName,
+                loaded: downloadedSize,
+                total: totalSize,
+                percentage
+              })
+
+              lastProgressUpdate = now
+            }
+          })
+
+          response.pipe(file)
+
+          file.on('finish', () => {
+            file.close((err) => {
+              if (err) {
+                console.error('[model:download] Error closing file:', err.message)
+                fs.unlink(filePath, () => {})
+                resolve({
+                  success: false,
+                  error: err.message
+                })
+                return
+              }
+
+              const stats = fs.statSync(filePath)
+              console.log('[model:download] Download completed:', filePath)
+              console.log('[model:download] File size:', stats.size, 'bytes')
+
+              if (totalSize > 0 && stats.size !== totalSize) {
+                console.warn(
+                  `[model:download] Size mismatch: expected ${totalSize}, got ${stats.size}`
+                )
+              }
+
+              resolve({ success: true, path: filePath })
+            })
+          })
+
+          file.on('error', (error) => {
+            console.error('[model:download] File write error:', error.message)
+            fs.unlink(filePath, () => {})
+            resolve({
+              success: false,
+              error: error.message
+            })
+          })
+
+          response.on('error', (error: any) => {
+            console.error('[model:download] Response error:', error.message)
+            fs.unlink(filePath, () => {})
+            resolve({
+              success: false,
+              error: error.message
+            })
+          })
+        }
+      } catch (error) {
+        console.error('[model:download] Error:', error)
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to download model'
+        }
+      }
+    }
+  )
+
+  // Get model path
+  ipcMain.handle('model:get-path', async (_event, modelId: string) => {
+    const userDataPath = app.getPath('userData')
+    const modelPath = path.join(userDataPath, 'models', modelId)
+    return { path: modelPath }
+  })
 }
 
 function createWindow(): void {
@@ -30,6 +260,22 @@ function createWindow(): void {
       nodeIntegration: false,
       contextIsolation: true
     }
+  })
+
+  // Configure CSP to allow custom protocols
+  mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          "default-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+            "connect-src 'self' http: https: ws: wss: local-image: local-resource:; " +
+            "img-src 'self' data: blob: local-image: https:; " +
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; " +
+            "style-src 'self' 'unsafe-inline';"
+        ]
+      }
+    })
   })
 
   mainWindow.on('ready-to-show', () => {
@@ -107,7 +353,6 @@ function setupStorageHandlers() {
 
       const fileContent = fs.readFileSync(storagePath, 'utf8')
 
-      // ✅ Kiểm tra file rỗng hoặc invalid
       if (!fileContent || fileContent.trim().length === 0) {
         console.warn(`[storage:get] Empty file for key: ${key}`)
         return null
@@ -151,430 +396,91 @@ function setupStorageHandlers() {
   })
 }
 
-// Helper function to initialize schema
-async function initializeCloudDatabaseSchema() {
-  try {
-    if (!cloudDbPool) throw new Error('Cloud database not connected')
-
-    const queries = [
-      // === SESSION TABLE ===
-      `CREATE TABLE IF NOT EXISTS sessions (
-        id TEXT PRIMARY KEY,
-        title TEXT,
-        description TEXT,
-        questions JSONB NOT NULL DEFAULT '[]'::jsonb,
-        status TEXT NOT NULL CHECK (status IN ('pending', 'completed')) DEFAULT 'pending',
-        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        completed_at TIMESTAMP,
-        expires_at TIMESTAMP,
-        difficulty_level INTEGER CHECK (difficulty_level BETWEEN 1 AND 10),
-        total_time_spent INTEGER,
-        total_score INTEGER,
-        accuracy_rate NUMERIC(5,2),
-        attempts_allowed INTEGER NOT NULL DEFAULT 1,
-        target_language TEXT NOT NULL DEFAULT 'en',
-        source_language TEXT NOT NULL DEFAULT 'vi',
-        topics JSONB DEFAULT '[]'::jsonb,
-        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-      )`,
-      // === VOCABULARY TABLES ===
-      `CREATE TABLE IF NOT EXISTS vocabulary_items (
-        id TEXT PRIMARY KEY,
-        item_type TEXT NOT NULL CHECK (item_type IN ('word', 'phrase')),
-        content TEXT NOT NULL,
-        pronunciation TEXT,
-        difficulty_level INTEGER CHECK (difficulty_level BETWEEN 1 AND 10),
-        frequency_rank INTEGER CHECK (frequency_rank BETWEEN 1 AND 10),
-        category TEXT,
-        tags JSONB DEFAULT '[]'::jsonb,
-        metadata JSONB DEFAULT '{}'::jsonb,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-      )`,
-      `CREATE TABLE IF NOT EXISTS vocabulary_definitions (
-        id TEXT PRIMARY KEY,
-        vocabulary_item_id TEXT NOT NULL REFERENCES vocabulary_items(id) ON DELETE CASCADE,
-        meaning TEXT NOT NULL,
-        translation TEXT,
-        usage_context TEXT,
-        word_type TEXT CHECK (word_type IN ('noun', 'verb', 'adjective', 'adverb', 'pronoun', 'preposition', 'conjunction', 'interjection', 'determiner', 'exclamation')),
-        phrase_type TEXT CHECK (phrase_type IN ('idiom', 'phrasal_verb', 'collocation', 'slang', 'expression')),
-        created_at TIMESTAMP NOT NULL DEFAULT NOW()
-      )`,
-      `CREATE TABLE IF NOT EXISTS vocabulary_examples (
-        id TEXT PRIMARY KEY,
-        definition_id TEXT NOT NULL REFERENCES vocabulary_definitions(id) ON DELETE CASCADE,
-        sentence TEXT NOT NULL,
-        translation TEXT,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW()
-      )`,
-      `CREATE TABLE IF NOT EXISTS vocabulary_analytics (
-        id TEXT PRIMARY KEY,
-        vocabulary_item_id TEXT NOT NULL REFERENCES vocabulary_items(id) ON DELETE CASCADE,
-        mastery_score INTEGER NOT NULL DEFAULT 0 CHECK (mastery_score BETWEEN 0 AND 100),
-        last_reviewed TIMESTAMP,
-        streak INTEGER NOT NULL DEFAULT 0,
-        common_errors JSONB DEFAULT '[]'::jsonb,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-      )`,
-      `CREATE TABLE IF NOT EXISTS vocabulary_relationship (
-        id TEXT PRIMARY KEY,
-        vocabulary_item_id TEXT NOT NULL REFERENCES vocabulary_items(id) ON DELETE CASCADE,
-        relationship_type TEXT NOT NULL,
-        vocabulary_item_type TEXT NOT NULL CHECK (vocabulary_item_type IN ('word', 'phrase')),
-        content TEXT NOT NULL,
-        metadata JSONB DEFAULT '{}'::jsonb,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW()
-      )`,
-
-      // === GRAMMAR TABLES ===
-      `CREATE TABLE IF NOT EXISTS grammar_items (
-        id TEXT PRIMARY KEY,
-        item_type TEXT NOT NULL CHECK (item_type IN ('tense', 'structure', 'rule', 'pattern')),
-        title TEXT NOT NULL,
-        difficulty_level INTEGER CHECK (difficulty_level BETWEEN 1 AND 10),
-        frequency_rank INTEGER CHECK (frequency_rank BETWEEN 1 AND 10),
-        category TEXT,
-        tags JSONB DEFAULT '[]'::jsonb,
-        metadata JSONB DEFAULT '{}'::jsonb,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW()
-      )`,
-      `CREATE TABLE IF NOT EXISTS grammar_rule (
-        id TEXT PRIMARY KEY,
-        grammar_item_id TEXT NOT NULL REFERENCES grammar_items(id) ON DELETE CASCADE,
-        rule_description TEXT NOT NULL,
-        translation TEXT,
-        formula TEXT,
-        usage_context TEXT,
-        notes TEXT,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW()
-      )`,
-      `CREATE TABLE IF NOT EXISTS grammar_example (
-        id TEXT PRIMARY KEY,
-        grammar_rule_id TEXT NOT NULL REFERENCES grammar_rule(id) ON DELETE CASCADE,
-        sentence TEXT NOT NULL,
-        translation TEXT,
-        is_correct BOOLEAN NOT NULL DEFAULT true,
-        explanation TEXT,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW()
-      )`,
-      `CREATE TABLE IF NOT EXISTS grammar_common_mistake (
-        id TEXT PRIMARY KEY,
-        grammar_item_id TEXT NOT NULL REFERENCES grammar_items(id) ON DELETE CASCADE,
-        incorrect_example TEXT NOT NULL,
-        correct_example TEXT NOT NULL,
-        explanation TEXT NOT NULL,
-        translation TEXT,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW()
-      )`,
-      `CREATE TABLE IF NOT EXISTS grammar_relation (
-        id TEXT PRIMARY KEY,
-        grammar_item_id TEXT NOT NULL REFERENCES grammar_items(id) ON DELETE CASCADE,
-        related_item_id TEXT NOT NULL REFERENCES grammar_items(id) ON DELETE CASCADE,
-        relation_type TEXT NOT NULL CHECK (relation_type IN ('prerequisite', 'related', 'contrast', 'progression')),
-        created_at TIMESTAMP NOT NULL DEFAULT NOW()
-      )`,
-      `CREATE TABLE IF NOT EXISTS grammar_analytics (
-        id TEXT PRIMARY KEY,
-        grammar_item_id TEXT NOT NULL REFERENCES grammar_items(id) ON DELETE CASCADE,
-        mastery_score INTEGER NOT NULL DEFAULT 0 CHECK (mastery_score BETWEEN 0 AND 100),
-        last_reviewed_at TIMESTAMP,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW()
-      )`,
-      `CREATE TABLE IF NOT EXISTS grammar_question_history (
-        id TEXT PRIMARY KEY,
-        grammar_item_id TEXT NOT NULL REFERENCES grammar_items(id) ON DELETE CASCADE,
-        question_id TEXT NOT NULL
-      )`,
-
-      // === INDEXES ===
-      `CREATE INDEX IF NOT EXISTS idx_vocab_type ON vocabulary_items(item_type)`,
-      `CREATE INDEX IF NOT EXISTS idx_vocab_created ON vocabulary_items(created_at DESC)`,
-      `CREATE INDEX IF NOT EXISTS idx_vocab_updated ON vocabulary_items(updated_at DESC)`,
-      `CREATE INDEX IF NOT EXISTS idx_vocab_content ON vocabulary_items(content)`,
-      `CREATE INDEX IF NOT EXISTS idx_definition_vocab ON vocabulary_definitions(vocabulary_item_id)`,
-      `CREATE INDEX IF NOT EXISTS idx_example_def ON vocabulary_examples(definition_id)`,
-      `CREATE INDEX IF NOT EXISTS idx_vocab_analytics ON vocabulary_analytics(vocabulary_item_id)`,
-      `CREATE INDEX IF NOT EXISTS idx_vocab_relationship ON vocabulary_relationship(vocabulary_item_id)`,
-      `CREATE INDEX IF NOT EXISTS idx_vocab_relationship_type ON vocabulary_relationship(relationship_type)`,
-      `CREATE INDEX IF NOT EXISTS idx_grammar_type ON grammar_items(item_type)`,
-      `CREATE INDEX IF NOT EXISTS idx_grammar_created ON grammar_items(created_at DESC)`,
-      `CREATE INDEX IF NOT EXISTS idx_grammar_rule ON grammar_rule(grammar_item_id)`,
-      `CREATE INDEX IF NOT EXISTS idx_grammar_example ON grammar_example(grammar_rule_id)`,
-      `CREATE INDEX IF NOT EXISTS idx_grammar_mistake ON grammar_common_mistake(grammar_item_id)`,
-      `CREATE INDEX IF NOT EXISTS idx_grammar_relation ON grammar_relation(grammar_item_id)`,
-      `CREATE INDEX IF NOT EXISTS idx_grammar_analytics ON grammar_analytics(grammar_item_id)`,
-      `CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status)`,
-      `CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)`
-    ]
-
-    for (const query of queries) {
-      await cloudDbPool.query(query)
-    }
-
-    return { success: true }
-  } catch (error) {
-    console.error('[initializeCloudDatabaseSchema] Error:', error)
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Schema initialization failed'
-    }
-  }
-}
-
-// Setup IPC handlers for cloud database operations
-function setupCloudDatabaseHandlers() {
-  // Test cloud database connection
-  ipcMain.handle('cloud-db:test-connection', async (_event, connectionString: string) => {
-    let testPool: Pool | null = null
+// Setup IPC handlers for folder and image operations
+function setupFolderHandlers() {
+  // Select folder dialog
+  ipcMain.handle('folder:select', async () => {
     try {
-      testPool = new Pool({ connectionString })
-      await testPool.query('SELECT 1')
-      return { success: true }
-    } catch (error) {
-      console.error('[cloud-db:test-connection] Error:', error)
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      }
-    } finally {
-      if (testPool) {
-        await testPool.end()
-      }
-    }
-  })
-
-  // Connect to cloud database
-  ipcMain.handle('cloud-db:connect', async (_event, connectionString: string) => {
-    try {
-      // ✅ Không close nếu đã connect với cùng connection string
-      if (cloudDbPool && isCloudDbConnected) {
-        return { success: true }
-      }
-
-      // Close existing connection if different
-      if (cloudDbPool) {
-        await cloudDbPool.end()
-      }
-
-      cloudDbPool = new Pool({ connectionString })
-
-      // Test connection
-      await cloudDbPool.query('SELECT 1')
-      isCloudDbConnected = true // ✅ Mark as connected
-
-      // Auto-initialize schema after successful connection
-      const initResult = await initializeCloudDatabaseSchema()
-
-      if (!initResult.success) {
-        console.warn('[cloud-db:connect] Schema initialization warning:', initResult.error)
-        // Don't fail connection if schema already exists
-      }
-
-      return { success: true }
-    } catch (error) {
-      console.error('[cloud-db:connect] Error:', error)
-      cloudDbPool = null
-      isCloudDbConnected = false
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Connection failed'
-      }
-    }
-  })
-
-  // Disconnect from cloud database
-  ipcMain.handle('cloud-db:disconnect', async () => {
-    try {
-      if (cloudDbPool) {
-        await cloudDbPool.end()
-        cloudDbPool = null
-        isCloudDbConnected = false
-      }
-      return { success: true }
-    } catch (error) {
-      console.error('[cloud-db:disconnect] Error:', error)
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Disconnect failed'
-      }
-    }
-  })
-
-  // Initialize cloud database schema
-  ipcMain.handle('cloud-db:initialize-schema', async () => {
-    try {
-      if (!cloudDbPool) throw new Error('Cloud database not connected')
-
-      const queries = [
-        `CREATE TABLE IF NOT EXISTS vocabulary_items (
-          id TEXT PRIMARY KEY,
-          item_type TEXT NOT NULL,
-          content TEXT NOT NULL,
-          pronunciation TEXT,
-          difficulty_level INTEGER,
-          frequency_rank INTEGER,
-          category TEXT,
-          tags JSONB,
-          metadata JSONB,
-          created_at TIMESTAMP NOT NULL,
-          updated_at TIMESTAMP NOT NULL
-        )`,
-        `CREATE TABLE IF NOT EXISTS grammar_items (
-          id TEXT PRIMARY KEY,
-          item_type TEXT NOT NULL,
-          title TEXT NOT NULL,
-          difficulty_level INTEGER,
-          frequency_rank INTEGER,
-          category TEXT,
-          tags JSONB,
-          metadata JSONB,
-          created_at TIMESTAMP NOT NULL,
-          updated_at TIMESTAMP NOT NULL
-        )`,
-        `CREATE INDEX IF NOT EXISTS idx_vocab_type ON vocabulary_items(item_type)`,
-        `CREATE INDEX IF NOT EXISTS idx_grammar_type ON grammar_items(item_type)`
-      ]
-
-      for (const query of queries) {
-        await cloudDbPool.query(query)
-      }
-
-      return { success: true }
-    } catch (error) {
-      console.error('[cloud-db:initialize-schema] Error:', error)
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Schema initialization failed'
-      }
-    }
-  })
-
-  // Execute cloud database query
-  ipcMain.handle('cloud-db:query', async (_event, query: string, params: any[] = []) => {
-    try {
-      if (!cloudDbPool) throw new Error('Cloud database not connected')
-
-      const result = await cloudDbPool.query(query, params)
-      return {
-        success: true,
-        rows: result.rows,
-        rowCount: result.rowCount
-      }
-    } catch (error) {
-      console.error('[cloud-db:query] Error:', error)
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Query failed',
-        rows: [],
-        rowCount: 0
-      }
-    }
-  })
-
-  // Get connection status
-  ipcMain.handle('cloud-db:status', async () => {
-    return {
-      isConnected: cloudDbPool !== null && isCloudDbConnected
-    }
-  })
-}
-
-// Setup IPC handlers for popup windows
-function setupPopupHandlers() {
-  ipcMain.handle('popup:show-session', async (_event, sessionData: any) => {
-    try {
-      // Get screen dimensions
-      const { screen } = require('electron')
-      const primaryDisplay = screen.getPrimaryDisplay()
-      const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize
-
-      // Popup config: small window, bottom-right corner
-      const popupWidth = 420
-      const popupHeight = 280
-      const padding = 20
-
-      const popupWindow = new BrowserWindow({
-        width: popupWidth,
-        height: popupHeight,
-        x: screenWidth - popupWidth - padding,
-        y: screenHeight - popupHeight - padding,
-        show: false,
-        frame: true,
-        resizable: false,
-        minimizable: false,
-        maximizable: false,
-        alwaysOnTop: false,
-        skipTaskbar: false,
-        backgroundColor: '#1f2937',
-        title: 'Session Notification',
-        webPreferences: {
-          preload: join(__dirname, '../preload/index.js'),
-          sandbox: false,
-          nodeIntegration: false,
-          contextIsolation: true
-        }
+      const result = await dialog.showOpenDialog({
+        properties: ['openDirectory']
       })
 
-      popupWindow.setMenuBarVisibility(false)
-
-      // Load popup HTML
-      if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-        popupWindow.loadURL(
-          `${process.env['ELECTRON_RENDERER_URL']}#/popup-session?sessionId=${sessionData.id}`
-        )
-      } else {
-        popupWindow.loadFile(join(__dirname, '../renderer/index.html'), {
-          hash: `/popup-session?sessionId=${sessionData.id}`
-        })
+      if (result.canceled || result.filePaths.length === 0) {
+        return { success: false, canceled: true }
       }
 
-      // Show with fade-in animation
-      popupWindow.once('ready-to-show', () => {
-        popupWindow.show()
-        popupWindow.focus()
-      })
-
-      return { success: true }
+      const folderPath = result.filePaths[0]
+      return { success: true, folderPath }
     } catch (error) {
-      console.error('[popup:show-session] Error:', error)
+      console.error('[folder:select] Error:', error)
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to show popup'
+        error: error instanceof Error ? error.message : 'Failed to select folder'
       }
     }
   })
 
-  // Hide popup and show/focus main window
-  ipcMain.handle('popup:hide-and-focus-main', async (_event, sessionId: string) => {
+  // Read folder contents
+  ipcMain.handle('folder:read', async (_event, folderPath: string) => {
     try {
-      // Hide all popup windows
-      const allWindows = BrowserWindow.getAllWindows()
-      allWindows.forEach((win) => {
-        if (win !== mainWindow && win.getTitle() === 'Session Notification') {
-          win.hide()
-        }
-      })
+      const files = await fs.promises.readdir(folderPath, { withFileTypes: true })
 
-      // Show and focus main window
-      if (mainWindow) {
-        if (mainWindow.isMinimized()) {
-          mainWindow.restore()
-        }
-        mainWindow.show()
-        mainWindow.focus()
+      const fileList = files
+        .filter((file) => file.isFile())
+        .map((file) => ({
+          name: file.name,
+          path: path.join(folderPath, file.name)
+        }))
 
-        // Navigate to session page
-        mainWindow.webContents.send('navigate-to-session', sessionId)
-      }
-
-      return { success: true }
+      return { success: true, files: fileList }
     } catch (error) {
-      console.error('[popup:hide-and-focus-main] Error:', error)
+      console.error('[folder:read] Error:', error)
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to focus main window'
+        error: error instanceof Error ? error.message : 'Failed to read folder'
+      }
+    }
+  })
+
+  // Convert image format
+  ipcMain.handle('image:convert', async (_event, sourcePath: string, targetFormat: string) => {
+    try {
+      const sharp = require('sharp')
+      const ext = path.extname(sourcePath)
+      const targetPath = sourcePath.replace(ext, `.${targetFormat}`)
+
+      await sharp(sourcePath).toFormat(targetFormat).toFile(targetPath)
+
+      return { success: true, targetPath }
+    } catch (error) {
+      console.error('[image:convert] Error:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to convert image'
+      }
+    }
+  })
+
+  // Batch convert images
+  ipcMain.handle('image:batch-convert', async (_event, files: string[], targetFormat: string) => {
+    try {
+      const sharp = require('sharp')
+      const results = []
+
+      for (const sourcePath of files) {
+        const ext = path.extname(sourcePath)
+        const targetPath = sourcePath.replace(ext, `.${targetFormat}`)
+
+        await sharp(sourcePath).toFormat(targetFormat).toFile(targetPath)
+        results.push({ sourcePath, targetPath, success: true })
+      }
+
+      return { success: true, results }
+    } catch (error) {
+      console.error('[image:batch-convert] Error:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to batch convert images'
       }
     }
   })
@@ -586,31 +492,14 @@ app.whenReady().then(async () => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
 
+  // Register custom protocols
+  registerLocalImageProtocol()
+  registerLocalResourceProtocol()
+
   // Setup IPC handlers
   setupStorageHandlers()
-  setupCloudDatabaseHandlers()
-  setupPopupHandlers()
-
-  // ✅ Auto-connect to database if connection string exists
-  try {
-    const storagePath = getStorageFilePath()
-    if (fs.existsSync(storagePath)) {
-      const fileContent = fs.readFileSync(storagePath, 'utf8')
-      const data = JSON.parse(fileContent)
-
-      if (data.cloud_database_connection?.connectionString) {
-        const connectionString = data.cloud_database_connection.connectionString
-
-        cloudDbPool = new Pool({ connectionString })
-        await cloudDbPool.query('SELECT 1')
-        isCloudDbConnected = true
-
-        await initializeCloudDatabaseSchema()
-      }
-    }
-  } catch (error) {
-    console.error('[app.whenReady] ❌ Auto-connect failed:', error)
-  }
+  setupFolderHandlers()
+  setupModelHandlers()
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
@@ -640,16 +529,8 @@ app.whenReady().then(async () => {
   })
 })
 
-app.on('window-all-closed', async () => {
+app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
-    if (cloudDbPool) {
-      try {
-        await cloudDbPool.end()
-        isCloudDbConnected = false
-      } catch (err) {
-        console.error('[app quit] ❌ Error closing database:', err)
-      }
-    }
     app.quit()
   }
 })

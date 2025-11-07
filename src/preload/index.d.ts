@@ -2,37 +2,44 @@ import { ElectronAPI } from '@electron-toolkit/preload'
 
 // Define the API interface
 interface API {
-  sqlite: {
-    createDatabase: (path: string) => Promise<any>
-    openDatabase: (path: string) => Promise<any>
-    closeDatabase: () => Promise<any>
-    runQuery: (query: string, params?: any[]) => Promise<any>
-    getAllRows: (query: string, params?: any[]) => Promise<any>
-    getOneRow: (query: string, params?: any[]) => Promise<any>
-    status: () => Promise<{ isConnected: boolean; message: string }>
-  }
   storage: {
     set: (key: string, value: any) => Promise<void>
     get: (key: string) => Promise<any>
     remove: (key: string) => Promise<void>
   }
-  cloudDatabase: {
-    testConnection: (connectionString: string) => Promise<{ success: boolean; error?: string }>
-    connect: (connectionString: string) => Promise<{ success: boolean; error?: string }>
-    disconnect: () => Promise<{ success: boolean; error?: string }>
-    initializeSchema: () => Promise<{ success: boolean; error?: string }>
-    query: (
-      query: string,
-      params?: any[]
-    ) => Promise<{ success: boolean; rows: any[]; rowCount: number; error?: string }>
-    status: () => Promise<{ isConnected: boolean }>
+  folder: {
+    select: () => Promise<{
+      success: boolean
+      folderPath?: string
+      canceled?: boolean
+      error?: string
+    }>
+    read: (folderPath: string) => Promise<{
+      success: boolean
+      files?: Array<{ name: string; path: string }>
+      error?: string
+    }>
   }
-  vocabulary: {
-    update: (item: any) => Promise<{ success: boolean; error?: string }>
+  image: {
+    convert: (
+      sourcePath: string,
+      targetFormat: string
+    ) => Promise<{ success: boolean; targetPath?: string; error?: string }>
+    batchConvert: (
+      files: string[],
+      targetFormat: string
+    ) => Promise<{ success: boolean; results?: any[]; error?: string }>
   }
-  popup: {
-    showSession: (sessionData: any) => Promise<{ success: boolean; error?: string }>
-    hideAndFocusMain: (sessionId: string) => Promise<{ success: boolean; error?: string }>
+  model: {
+    check: (modelId: string, customPath?: string) => Promise<{ exists: boolean; files?: string[] }>
+    download: (params: {
+      modelId: string
+      fileName: string
+      url: string
+      localPath: string
+      customBasePath?: string
+    }) => Promise<{ success: boolean; path?: string; error?: string }>
+    getPath: (modelId: string) => Promise<{ path: string }>
   }
 }
 
