@@ -10,6 +10,7 @@ class AppConfig:
     window_height: int = 800
     theme: str = "light"
     language: str = "en"
+    enable_hotload: bool = True  # Enable hotload in development
     
     CONFIG_FILE = "config.json"
     
