@@ -26,9 +26,9 @@ class CustomModal(QDialog):
         self.apply_styles()
         self.setup_connections()
         
-        # Modal properties
+        # Dialog properties
         self.setModal(True)
-        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
+        self.setWindowFlags(Qt.Modal | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         
     def setup_ui(self):
@@ -141,7 +141,7 @@ class CustomModal(QDialog):
         
         modal_style = f"""
             QFrame {{
-                background-color: var(--dialog-background);
+                background-color: var(--modal-background);
                 border-radius: 12px;
                 border: 1px solid var(--border);
                 min-width: {size_config['width']};

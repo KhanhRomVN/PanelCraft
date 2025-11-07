@@ -28,6 +28,24 @@ class Application(QApplication):
             # Setup theme (this will apply the stylesheet)
             # No need to setup separate stylesheet as theme manager handles it
             
+            # Kiểm tra và tải models nếu cần
+            from core.model_manager import ModelManager
+            from widget.modal.model_download_modal import ModelDownloadModal
+            
+            self.model_manager = ModelManager()
+            
+            # Kiểm tra xem có cần tải models không
+            if not self.model_manager.is_setup_complete():
+                self.logger.info("Models chưa đầy đủ, hiển thị modal tải xuống")
+                
+                # Hiển thị modal tải models
+                modal = ModelDownloadModal(self.model_manager)
+                result = modal.exec()
+                
+                if result != ModelDownloadModal.Accepted:
+                    self.logger.warning("User cancelled model download")
+                    return False
+            
             # Create main window
             self.main_window = MainWindow(self.config, self.theme_manager)
             self.main_window.show()

@@ -17,7 +17,7 @@ class ColorSettings:
     border_focus: str = "#cbd5e1"
     card_background: str = "#ffffff"
     input_background: str = "#ffffff"
-    dialog_background: str = "#ffffff"
+    modal_background: str = "#ffffff"
     dropdown_background: str = "#ffffff"
     dropdown_item_hover: str = "#f8fafc"
     sidebar_background: str = "#f9fafb"
@@ -36,7 +36,7 @@ class ColorSettings:
     clock_gradient_from: str = "#3686ff"
     clock_gradient_to: str = "#1d4ed8"
     card_shadow: Optional[str] = None
-    dialog_shadow: Optional[str] = None
+    modal_shadow: Optional[str] = None
     dropdown_shadow: Optional[str] = None
 
 class ThemePalette:
@@ -65,7 +65,7 @@ class ThemePresets:
                     border_focus="#cbd5e1",
                     card_background="#ffffff",
                     input_background="#ffffff",
-                    dialog_background="#ffffff",
+                    modal_background="#ffffff",
                     dropdown_background="#ffffff",
                     dropdown_item_hover="#f8fafc",
                     sidebar_background="#f9fafb",
@@ -98,7 +98,7 @@ class ThemePresets:
                     border_focus="#a5b4fc",
                     card_background="#ffffff",
                     input_background="#ffffff",
-                    dialog_background="#ffffff",
+                    modal_background="#ffffff",
                     dropdown_background="#ffffff",
                     dropdown_item_hover="#e0e7ff",
                     sidebar_background="#e0e7ff",
@@ -136,7 +136,7 @@ class ThemePresets:
                     border_focus="#418dfe",
                     card_background="#242424",
                     input_background="#1e1e1e",
-                    dialog_background="#1e1e1e",
+                    modal_background="#1e1e1e",
                     dropdown_background="#1e1e1e",
                     dropdown_item_hover="#2d2d2d",
                     sidebar_background="#131313",
@@ -169,7 +169,7 @@ class ThemePresets:
                     border_focus="#6366f1",
                     card_background="#0f172a",
                     input_background="#1e293b",
-                    dialog_background="#0f172a",
+                    modal_background="#0f172a",
                     dropdown_background="#1e293b",
                     dropdown_item_hover="#334155",
                     sidebar_background="#0b0e2a",
@@ -459,14 +459,14 @@ class ThemeManager(QObject):
             padding: 0 5px 0 5px;
         }}
         
-        /* Dialogs */
-        QDialog {{
-            background-color: {colors.dialog_background};
+        /* Modals */
+        QModal {{
+            background-color: {colors.modal_background};
             color: {colors.text_primary};
         }}
         
         QMessageBox {{
-            background-color: {colors.dialog_background};
+            background-color: {colors.modal_background};
             color: {colors.text_primary};
         }}
         
