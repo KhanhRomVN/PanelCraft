@@ -1,1 +1,3 @@
 # PanelCraft
+
+tree -I "venv"
