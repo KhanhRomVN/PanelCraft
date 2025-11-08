@@ -13,6 +13,7 @@ class MangaPipelineThread(QThread):
     """Thread chạy full pipeline: Segmentation -> Text Detection -> OCR -> Final Composition"""
     
     result_ready = Signal(int, QImage)  # index, final result image (step 5)
+    visualization_ready = Signal(int, QImage)  # THÊM: index, visualization với rectangles
     ocr_result_ready = Signal(int, list)  # index, list of OCR texts
     progress_updated = Signal(int, int, str)  # current, total, step_name
     error_occurred = Signal(str)
@@ -95,30 +96,45 @@ class MangaPipelineThread(QThread):
                 self.logger.warning("Continuing without OCR functionality")
                 self.ocr_model = None
             
-            # Process each image
+                        # Process each image
             total = len(self.image_paths)
+            final_results = []  # THÊM: Lưu tạm final results
+            
             for idx, image_path in enumerate(self.image_paths):
                 try:
+                    self.logger.info(f"[THREAD] ========== Processing image {idx}/{total} ==========")
+                    
                     # Load image
                     image = cv2.imread(image_path)
                     if image is None:
                         self.logger.error(f"Failed to load image: {image_path}")
+                        final_results.append(None)
                         continue
                     
                     # Run full pipeline
+                    self.logger.info(f"[THREAD] Starting pipeline for image {idx}")
                     final_result = self.process_single_image(image, idx, total)
+                    self.logger.info(f"[THREAD] Pipeline completed for image {idx}")
                     
-                    # Convert to QImage
+                    # Convert to QImage và LƯU TẠM (không emit ngay)
                     qimage = self.numpy_to_qimage(final_result)
-                    
-                    # Emit result
-                    self.result_ready.emit(idx, qimage)
+                    final_results.append((idx, qimage))
+                    self.logger.info(f"[THREAD] Final result stored (not emitted yet) for image {idx}")
                     
                 except Exception as e:
                     self.logger.error(f"Error processing image {idx}: {e}")
                     import traceback
                     traceback.print_exc()
+                    final_results.append(None)
                     continue
+            
+            # ========== EMIT TẤT CẢ FINAL RESULTS SAU KHI XONG HẾT ==========
+            self.logger.info(f"[THREAD] All images processed. Emitting {len(final_results)} final results...")
+            for result in final_results:
+                if result is not None:
+                    idx, qimage = result
+                    self.logger.info(f"[THREAD] Emitting final result_ready for image {idx}")
+                    self.result_ready.emit(idx, qimage)
                             
         except Exception as e:
             self.logger.error(f"Error in pipeline thread: {e}")
@@ -142,6 +158,14 @@ class MangaPipelineThread(QThread):
         if not segments:
             self.logger.warning("No segments found, returning original image")
             return image_rgb
+        
+        # ========== STEP 1.5: CREATE VISUALIZATION ==========
+        self.logger.info(f"[PIPELINE] Image {idx}: Creating visualization with {len(segments)} segments")
+        visualization_image = self.create_segment_outline_visualization(image_rgb, segments)
+        vis_qimage = self.numpy_to_qimage(visualization_image)
+        self.logger.info(f"[PIPELINE] Image {idx}: Emitting visualization_ready signal")
+        self.visualization_ready.emit(idx, vis_qimage)
+        self.logger.info(f"[PIPELINE] Image {idx}: Visualization signal emitted")
                 
         # ========== STEP 2: Create Blank Canvas ==========
         self.progress_updated.emit(idx + 1, total, "Step 2: Creating canvas")
@@ -176,10 +200,12 @@ class MangaPipelineThread(QThread):
                     ocr_texts.append("[OCR ERROR]")
             
             # Emit OCR results
+            self.logger.info(f"[PIPELINE] Image {idx}: Emitting OCR results with {len(ocr_texts)} texts")
             self.ocr_result_ready.emit(idx, ocr_texts)
         else:
             self.logger.warning("OCR model not loaded - skipping OCR step")
-                
+        
+        self.logger.info(f"[PIPELINE] Image {idx}: Pipeline completed, returning final image")
         return final_image
     
     # ========== SEGMENTATION METHODS ==========
@@ -199,6 +225,40 @@ class MangaPipelineThread(QThread):
         segments = self.postprocess_segmentation(outputs, scale, pad_w, pad_h, original_w, original_h, image_rgb)
         
         return segments
+    
+    def create_segment_outline_visualization(self, original_image: np.ndarray, segments: List[Dict]) -> np.ndarray:
+        """
+        Tạo visualization với:
+        - Background gốc
+        - Outline segment màu xanh lá (thickness=3)
+        - Hình chữ nhật đỏ bên trong (thickness=2)
+        
+        Args:
+            original_image: Ảnh gốc (RGB)
+            segments: List segments từ segmentation
+        
+        Returns:
+            np.ndarray: Ảnh visualization
+        """
+        vis_image = original_image.copy()
+        
+        for segment in segments:
+            mask = segment['mask']
+            
+            # Tìm contours từ mask
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # Vẽ outline màu xanh lá (0, 255, 0) với thickness=3
+            cv2.drawContours(vis_image, contours, -1, (0, 255, 0), thickness=3)
+            
+            # Vẽ hình chữ nhật đỏ nếu có
+            if segment.get('rectangle') is not None:
+                rect_x, rect_y, rect_w, rect_h = segment['rectangle']
+                # Vẽ màu đỏ (255, 0, 0) với thickness=2
+                cv2.rectangle(vis_image, (rect_x, rect_y), (rect_x + rect_w, rect_y + rect_h), 
+                            (255, 0, 0), thickness=2)
+        
+        return vis_image
     
     def preprocess_for_segmentation(self, image: np.ndarray) -> Tuple:
         """Preprocess image for segmentation model"""
@@ -308,13 +368,24 @@ class MangaPipelineThread(QThread):
             if cropped_original.size == 0:
                 continue
             
+            # Tìm hình chữ nhật lớn nhất bên trong segment
+            rectangle = self._find_largest_inscribed_rectangle(cropped_mask)
+            
+            # Adjust rectangle coordinates to global space
+            if rectangle is not None:
+                rect_x, rect_y, rect_w, rect_h = rectangle
+                global_rect = [x1 + rect_x, y1 + rect_y, rect_w, rect_h]
+            else:
+                global_rect = None
+            
             segments.append({
                 'id': i,
                 'box': [x1, y1, x2, y2],
                 'score': float(score),
                 'mask': mask_binary,
                 'cropped_original': cropped_original,
-                'cropped_mask': cropped_mask
+                'cropped_mask': cropped_mask,
+                'rectangle': global_rect  # THÊM rectangle vào segment
             })
         
         return segments
@@ -538,6 +609,15 @@ class MangaPipelineThread(QThread):
             
             final_image[y1:y2, x1:x2] = np.where(mask_3ch > 0, cleaned, roi)
         
+        # ========== VẼ RED RECTANGLES SAU KHI PASTE ==========
+        for segment in segments:
+            # Vẽ hình chữ nhật đỏ nếu có
+            if segment.get('rectangle') is not None:
+                rect_x, rect_y, rect_w, rect_h = segment['rectangle']
+                # Vẽ màu đỏ (255, 0, 0) với thickness=2
+                cv2.rectangle(final_image, (rect_x, rect_y), (rect_x + rect_w, rect_y + rect_h), 
+                            (255, 0, 0), thickness=2)
+        
         return final_image
     
     def run_ocr_on_segment(self, segment_image: np.ndarray) -> str:
@@ -581,6 +661,105 @@ class MangaPipelineThread(QThread):
         bytes_per_line = 3 * width
         qimage = QImage(image.data, width, height, bytes_per_line, QImage.Format_RGB888)
         return qimage.copy()
+    
+    def _find_largest_inscribed_rectangle(self, mask: np.ndarray) -> tuple:
+        """
+        Tìm hình chữ nhật nội tiếp có diện tích lớn nhất trong mask
+        
+        Args:
+            mask: Binary mask (np.uint8)
+        
+        Returns:
+            tuple: (x, y, width, height) hoặc None nếu không tìm thấy
+        """
+        if mask.sum() == 0:
+            return None
+        
+        coords = np.column_stack(np.where(mask > 0))
+        if len(coords) == 0:
+            return None
+        
+        y_min, x_min = coords.min(axis=0)
+        y_max, x_max = coords.max(axis=0)
+        
+        mask_crop = mask[y_min:y_max+1, x_min:x_max+1]
+        
+        h, w = mask_crop.shape
+        
+        max_area = 0
+        best_rect = None
+        
+        height_map = np.zeros((h, w), dtype=np.int32)
+        
+        for i in range(h):
+            for j in range(w):
+                if mask_crop[i, j] > 0:
+                    if i == 0:
+                        height_map[i, j] = 1
+                    else:
+                        height_map[i, j] = height_map[i-1, j] + 1
+                else:
+                    height_map[i, j] = 0
+        
+        for i in range(h):
+            histogram = height_map[i, :]
+            rect = self._largest_rectangle_in_histogram(histogram, i)
+            
+            if rect is not None:
+                x, y, rw, rh = rect
+                area = rw * rh
+                
+                if self._is_rectangle_inside_mask(mask_crop, x, y, rw, rh):
+                    if area > max_area:
+                        max_area = area
+                        best_rect = (x + x_min, y + y_min, rw, rh)
+        
+        return best_rect
+    
+    def _largest_rectangle_in_histogram(self, histogram: np.ndarray, row_index: int) -> tuple:
+        """Tìm hình chữ nhật lớn nhất trong histogram"""
+        stack = []
+        max_area = 0
+        best_rect = None
+        index = 0
+        
+        while index < len(histogram):
+            if not stack or histogram[index] >= histogram[stack[-1]]:
+                stack.append(index)
+                index += 1
+            else:
+                top = stack.pop()
+                height = histogram[top]
+                width = index if not stack else index - stack[-1] - 1
+                area = height * width
+                
+                if area > max_area:
+                    max_area = area
+                    x = stack[-1] + 1 if stack else 0
+                    y = row_index - height + 1
+                    best_rect = (x, y, width, height)
+        
+        while stack:
+            top = stack.pop()
+            height = histogram[top]
+            width = index if not stack else index - stack[-1] - 1
+            area = height * width
+            
+            if area > max_area:
+                max_area = area
+                x = stack[-1] + 1 if stack else 0
+                y = row_index - height + 1
+                best_rect = (x, y, width, height)
+        
+        return best_rect
+    
+    def _is_rectangle_inside_mask(self, mask: np.ndarray, x: int, y: int, width: int, height: int) -> bool:
+        """Kiểm tra xem hình chữ nhật có nằm hoàn toàn bên trong mask không"""
+        if x < 0 or y < 0 or x + width > mask.shape[1] or y + height > mask.shape[0]:
+            return False
+        
+        rect_region = mask[y:y+height, x:x+width]
+        return np.all(rect_region > 0)
 
 
 # ========== MAIN PROCESSOR ==========
@@ -589,6 +768,7 @@ class MangaPipelineProcessor(QObject):
     """Service để xử lý full manga pipeline"""
     
     result_ready = Signal(int, QImage)  # index, final result
+    visualization_ready = Signal(int, QImage)  # THÊM: visualization với rectangles
     ocr_result_ready = Signal(int, list)  # index, OCR texts
     progress_updated = Signal(int, int, str)  # current, total, step
     error_occurred = Signal(str)
@@ -620,6 +800,7 @@ class MangaPipelineProcessor(QObject):
         
         self.pipeline_thread = MangaPipelineThread(image_paths, seg_model_path, text_model_path, ocr_model_path)
         self.pipeline_thread.result_ready.connect(self.on_result_ready)
+        self.pipeline_thread.visualization_ready.connect(self.on_visualization_ready)  # THÊM
         self.pipeline_thread.ocr_result_ready.connect(self.on_ocr_result_ready)
         self.pipeline_thread.progress_updated.connect(self.on_progress_updated)
         self.pipeline_thread.error_occurred.connect(self.on_error)
@@ -691,6 +872,10 @@ class MangaPipelineProcessor(QObject):
     def on_ocr_result_ready(self, index: int, texts: list):
         """Forward OCR result"""
         self.ocr_result_ready.emit(index, texts)
+        
+    def on_visualization_ready(self, index: int, vis_image: QImage):
+        """Forward visualization signal"""
+        self.visualization_ready.emit(index, vis_image)
     
     def on_result_ready(self, index: int, result_image: QImage):
         """Forward result"""

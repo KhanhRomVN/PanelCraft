@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel, 
-                              QFileDialog, QScrollArea, QMessageBox)
+                              QFileDialog, QScrollArea, QMessageBox, QPushButton, QSplitter)
 from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtGui import QPixmap, QKeyEvent, QImage
 import logging
@@ -139,6 +139,7 @@ class CanvasPanel(QWidget):
     segmentation_completed = Signal(int, QImage)  # index, result image
     text_detection_completed = Signal(int, QImage)  # Thêm signal mới
     ocr_completed = Signal(int, list)  # Thêm signal mới
+    panel_visibility_changed = Signal(bool, bool)  # left_visible, right_visible
     
     def __init__(self):
         super().__init__()
@@ -147,8 +148,9 @@ class CanvasPanel(QWidget):
         self.image_paths: List[str] = []
         self.current_index: int = 0
         self.segmentation_results: dict = {}  # {index: QImage}
-        self.text_detection_results: dict = {}  # {index: QImage} - Thêm dictionary mới
-        self.ocr_results: dict = {}  # {index: list} - Thêm dictionary mới
+        self.visualization_results: dict = {}  # THÊM: {index: QImage} - Step 2 visualization
+        self.text_detection_results: dict = {}  # {index: QImage}
+        self.ocr_results: dict = {}  # {index: list}
         
         self.image_loader = ImageLoader()
         self.segmentation_processor: Optional[SegmentationProcessor] = None
@@ -159,21 +161,66 @@ class CanvasPanel(QWidget):
     
     def setup_ui(self):
         """Setup UI"""
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(4)
+        
+        # Toggle buttons bar
+        toggle_bar = QWidget()
+        toggle_bar.setStyleSheet("""
+            QWidget {
+                background-color: var(--sidebar-background);
+                border-bottom: 1px solid var(--border);
+            }
+        """)
+        toggle_layout = QHBoxLayout(toggle_bar)
+        toggle_layout.setContentsMargins(8, 4, 8, 4)
+        toggle_layout.setSpacing(8)
+        
+        self.toggle_left_btn = QPushButton("◀ Ẩn gốc")
+        self.toggle_left_btn.setCheckable(True)
+        self.toggle_left_btn.setStyleSheet(self._get_toggle_button_style())
+        self.toggle_left_btn.clicked.connect(self.toggle_left_panel)
+        toggle_layout.addWidget(self.toggle_left_btn)
+        
+        toggle_layout.addStretch()
+        
+        self.toggle_right_btn = QPushButton("Ẩn kết quả ▶")
+        self.toggle_right_btn.setCheckable(True)
+        self.toggle_right_btn.setStyleSheet(self._get_toggle_button_style())
+        self.toggle_right_btn.clicked.connect(self.toggle_right_panel)
+        toggle_layout.addWidget(self.toggle_right_btn)
+        
+        main_layout.addWidget(toggle_bar)
+        
+        # Splitter chứa 2 panels
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: var(--border);
+                width: 2px;
+            }
+            QSplitter::handle:hover {
+                background-color: var(--primary);
+            }
+        """)
         
         # Left panel - Original image
         self.left_panel = ImageDisplayWidget("Original Image")
-        layout.addWidget(self.left_panel, 1)
+        self.splitter.addWidget(self.left_panel)
         
-        # Right panel - Segmentation result
+        # Right panel - Processing results
         self.right_panel = ImageDisplayWidget("Processing Results")
-        layout.addWidget(self.right_panel, 1)
+        self.splitter.addWidget(self.right_panel)
+        
+        # Set initial sizes (50-50)
+        self.splitter.setSizes([1, 1])
+        
+        main_layout.addWidget(self.splitter, 1)
         
         # Apply focus to receive keyboard events
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setFocus()  # Set focus ngay khi init
+        self.setFocus()
     
     def setup_connections(self):
         """Setup signal connections"""
@@ -336,19 +383,33 @@ class CanvasPanel(QWidget):
         # Display original image on left panel
         self.left_panel.set_image(image_path=current_path)
         
-        # Priority: Segmentation (Step 5 - Final Result) > Text Detection > Nothing
-        # Chú ý: segmentation_results chứa kết quả STEP 5 từ pipeline
+        # Log available results
+        self.logger.info(f"[DISPLAY] Current index: {self.current_index}")
+        self.logger.info(f"[DISPLAY] Available results:")
+        self.logger.info(f"  - Final results: {list(self.segmentation_results.keys())}")
+        self.logger.info(f"  - Visualizations: {list(self.visualization_results.keys())}")
+        self.logger.info(f"  - Text detections: {list(self.text_detection_results.keys())}")
+        
+        # Priority: Final Result (Step 5) > Visualization (Step 2) > Text Detection > Nothing
         if self.current_index in self.segmentation_results:
+            self.logger.info(f"[DISPLAY] Showing FINAL RESULT for index {self.current_index}")
             result_qimage = self.segmentation_results[self.current_index]
             pixmap = QPixmap.fromImage(result_qimage)
             self.right_panel.set_image(pixmap=pixmap)
+        elif self.current_index in self.visualization_results:
+            # Hiển thị visualization với hình chữ nhật đỏ (Step 2)
+            self.logger.info(f"[DISPLAY] Showing VISUALIZATION for index {self.current_index}")
+            vis_qimage = self.visualization_results[self.current_index]
+            pixmap = QPixmap.fromImage(vis_qimage)
+            self.right_panel.set_image(pixmap=pixmap)
         elif self.current_index in self.text_detection_results:
+            self.logger.info(f"[DISPLAY] Showing TEXT DETECTION for index {self.current_index}")
             result_qimage = self.text_detection_results[self.current_index]
             pixmap = QPixmap.fromImage(result_qimage)
             self.right_panel.set_image(pixmap=pixmap)
         else:
-            self.right_panel.clear()
             self.logger.warning(f"[DISPLAY] Right panel: NO RESULTS available for index {self.current_index}")
+            self.right_panel.clear()
         
         # Emit signal for control panel
         self.image_changed.emit(self.current_index)
@@ -384,13 +445,15 @@ class CanvasPanel(QWidget):
             
             # Connect signals
             self.manga_pipeline_processor.result_ready.connect(self.on_final_result)
-            self.manga_pipeline_processor.ocr_result_ready.connect(self.on_ocr_result)  # THÊM DÒNG NÀY
+            self.manga_pipeline_processor.visualization_ready.connect(self.on_visualization_result)  # THÊM
+            self.manga_pipeline_processor.ocr_result_ready.connect(self.on_ocr_result)
             self.manga_pipeline_processor.progress_updated.connect(self.on_pipeline_progress)
             self.manga_pipeline_processor.error_occurred.connect(self.on_pipeline_error)
             self.manga_pipeline_processor.completed.connect(self.on_pipeline_completed)
         
         # Clear previous results
         self.segmentation_results.clear()
+        self.visualization_results.clear()  # THÊM
         self.text_detection_results.clear()
         self.ocr_results.clear()
         
@@ -452,16 +515,40 @@ class CanvasPanel(QWidget):
     def on_final_result(self, index: int, result_image: QImage):
         """Handle final result từ pipeline (Step 5 - Final composition)"""
         
+        self.logger.info(f"[FINAL] Received final result for index {index}")
+        
         # Lưu vào segmentation_results để có thể navigate
         self.segmentation_results[index] = result_image
+        self.logger.info(f"[FINAL] Stored final result. Total stored: {len(self.segmentation_results)}")
         
         # Update display nếu đây là ảnh hiện tại
         if index == self.current_index:
+            self.logger.info(f"[FINAL] Displaying final result for current image {index}")
+            self.logger.info(f"[FINAL] This will override visualization if it was displayed")
             pixmap = QPixmap.fromImage(result_image)
             self.right_panel.set_image(pixmap=pixmap)
+        else:
+            self.logger.info(f"[FINAL] Not current image (current={self.current_index}, received={index})")
         
         # Emit signal
         self.segmentation_completed.emit(index, result_image)
+        
+    def on_visualization_result(self, index: int, vis_image: QImage):
+        """Handle visualization result (step 2 - với hình chữ nhật đỏ)"""
+        
+        self.logger.info(f"[VIS] Received visualization for index {index}")
+        
+        # Lưu vào dictionary
+        self.visualization_results[index] = vis_image
+        self.logger.info(f"[VIS] Stored visualization. Total stored: {len(self.visualization_results)}")
+        
+        # Update display nếu đây là ảnh hiện tại
+        if index == self.current_index:
+            self.logger.info(f"[VIS] Displaying visualization for current image {index}")
+            pixmap = QPixmap.fromImage(vis_image)
+            self.right_panel.set_image(pixmap=pixmap)
+        else:
+            self.logger.info(f"[VIS] Not current image (current={self.current_index}, received={index})")
             
     def on_pipeline_progress(self, current: int, total: int, step: str):
         """Handle pipeline progress updates"""
@@ -473,3 +560,55 @@ class CanvasPanel(QWidget):
         """Handle pipeline error"""
         self.logger.error(f"Pipeline error: {error_msg}")
         QMessageBox.critical(self, "Lỗi Pipeline", error_msg)
+    
+    def toggle_left_panel(self):
+        """Toggle hiển thị left panel"""
+        if self.toggle_left_btn.isChecked():
+            self.left_panel.hide()
+            self.toggle_left_btn.setText("▶ Hiện gốc")
+        else:
+            self.left_panel.show()
+            self.toggle_left_btn.setText("◀ Ẩn gốc")
+        
+        # Emit signal để HomePage điều chỉnh layout
+        self.panel_visibility_changed.emit(
+            self.left_panel.isVisible(),
+            self.right_panel.isVisible()
+        )
+    
+    def toggle_right_panel(self):
+        """Toggle hiển thị right panel"""
+        if self.toggle_right_btn.isChecked():
+            self.right_panel.hide()
+            self.toggle_right_btn.setText("◀ Hiện kết quả")
+        else:
+            self.right_panel.show()
+            self.toggle_right_btn.setText("Ẩn kết quả ▶")
+        
+        # Emit signal để HomePage điều chỉnh layout
+        self.panel_visibility_changed.emit(
+            self.left_panel.isVisible(),
+            self.right_panel.isVisible()
+        )
+    
+    def _get_toggle_button_style(self) -> str:
+        """Style cho toggle buttons"""
+        return """
+            QPushButton {
+                background-color: var(--card-background);
+                color: var(--text-primary);
+                border: 1px solid var(--border);
+                border-radius: 4px;
+                padding: 4px 12px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: var(--sidebar-background);
+                border-color: var(--primary);
+            }
+            QPushButton:checked {
+                background-color: var(--primary);
+                color: white;
+                border-color: var(--primary);
+            }
+        """

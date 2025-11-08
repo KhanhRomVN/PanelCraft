@@ -1,4 +1,5 @@
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QGroupBox, QTextEdit
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox, 
+                              QTableWidget, QTableWidgetItem, QComboBox, QHeaderView)
 from PySide6.QtCore import Qt, Signal
 import logging
 
@@ -57,14 +58,16 @@ class ControlPanel(QWidget):
         model_layout = QVBoxLayout(model_group)
         model_layout.setSpacing(12)
         
-        # Model info
-        model_info = QLabel(
-            "Models:\n"
-            "- YOLOv8 Segmentation\n" 
-            "- Comic Text Detector\n"
-            "- Manga OCR"
+        # Pipeline description
+        pipeline_info = QLabel(
+            "5-step processing:\n"
+            "1. Segmentation (YOLOv8)\n"
+            "2. Visualization with rectangles\n"
+            "3. OCR text recognition\n"
+            "4. Text detection & removal\n"
+            "5. Final composition"
         )
-        model_info.setStyleSheet("""
+        pipeline_info.setStyleSheet("""
             color: var(--text-secondary);
             font-size: 13px;
             font-weight: normal;
@@ -72,8 +75,8 @@ class ControlPanel(QWidget):
             background-color: var(--sidebar-background);
             border-radius: 4px;
         """)
-        model_info.setWordWrap(True)
-        model_layout.addWidget(model_info)
+        pipeline_info.setWordWrap(True)
+        model_layout.addWidget(pipeline_info)
         
         # Run button
         self.run_button = CustomButton(
@@ -85,7 +88,7 @@ class ControlPanel(QWidget):
         self.run_button.clicked.connect(self.on_run_clicked)
         model_layout.addWidget(self.run_button)
         
-        # Progress label - THÊM CODE MỚI
+        # Progress label
         self.progress_label = QLabel()
         self.progress_label.setStyleSheet("""
             color: var(--text-secondary);
@@ -100,7 +103,7 @@ class ControlPanel(QWidget):
         layout.addWidget(model_group)
         
         # OCR Results group
-        ocr_group = QGroupBox("OCR Results")
+        ocr_group = QGroupBox("OCR Results & Translation")
         ocr_group.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
@@ -121,7 +124,9 @@ class ControlPanel(QWidget):
         ocr_layout = QVBoxLayout(ocr_group)
         ocr_layout.setSpacing(8)
         
-        # Current image info
+        # Current image info & Character management
+        header_layout = QHBoxLayout()
+        
         self.current_image_label = QLabel("No image selected")
         self.current_image_label.setStyleSheet("""
             color: var(--text-secondary);
@@ -129,24 +134,69 @@ class ControlPanel(QWidget):
             font-weight: normal;
             padding: 4px;
         """)
-        ocr_layout.addWidget(self.current_image_label)
+        header_layout.addWidget(self.current_image_label)
         
-        # OCR results display
-        self.ocr_text_edit = QTextEdit()
-        self.ocr_text_edit.setStyleSheet("""
-            QTextEdit {
+        header_layout.addStretch()
+        
+        # Manage Characters button
+        self.manage_characters_btn = CustomButton(
+            text="Manage Characters",
+            variant="secondary",
+            size="sm"
+        )
+        self.manage_characters_btn.clicked.connect(self.on_manage_characters)
+        header_layout.addWidget(self.manage_characters_btn)
+        
+        ocr_layout.addLayout(header_layout)
+        
+        # OCR results table
+        self.ocr_table = QTableWidget()
+        self.ocr_table.setColumnCount(4)
+        self.ocr_table.setHorizontalHeaderLabels(["STT", "Character", "Bản gốc", "Bản dịch"])
+        
+        # Set column widths
+        self.ocr_table.setColumnWidth(0, 50)   # STT
+        self.ocr_table.setColumnWidth(1, 120)  # Character
+        self.ocr_table.setColumnWidth(2, 200)  # Bản gốc
+        self.ocr_table.setColumnWidth(3, 200)  # Bản dịch
+        
+        # Enable stretch for last column
+        header = self.ocr_table.horizontalHeader()
+        header.setStretchLastSection(True)
+        
+        # Enable text wrapping và auto-resize rows
+        self.ocr_table.setWordWrap(True)
+        self.ocr_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        
+        self.ocr_table.setStyleSheet("""
+            QTableWidget {
                 background-color: var(--input-background);
                 color: var(--text-primary);
                 border: 1px solid var(--border);
                 border-radius: 4px;
+                gridline-color: var(--border);
+            }
+            QTableWidget::item {
                 padding: 8px;
-                font-size: 12px;
+                line-height: 1.4;
+            }
+            QHeaderView::section {
+                background-color: var(--sidebar-background);
+                color: var(--text-primary);
+                padding: 6px;
+                border: 1px solid var(--border);
+                font-weight: bold;
             }
         """)
-        self.ocr_text_edit.setReadOnly(True)
-        self.ocr_text_edit.setMaximumHeight(150)
-        self.ocr_text_edit.setPlaceholderText("OCR results will appear here after processing...")
-        ocr_layout.addWidget(self.ocr_text_edit)
+        
+        # Set minimum height để hiển thị tối đa 10 rows
+        # Row height ước tính: ~50px (với text wrapping)
+        # Header height: ~35px
+        # Scrollbar + padding: ~10px
+        self.ocr_table.setMinimumHeight(200)  # Tối thiểu 4-5 rows
+        self.ocr_table.setMaximumHeight(550)  # Tối đa ~10 rows
+        
+        ocr_layout.addWidget(self.ocr_table)
         
         layout.addWidget(ocr_group)
         
@@ -190,8 +240,8 @@ class ControlPanel(QWidget):
             "• Press Ctrl+O to open folder\n"
             "• Use ↑↓ keys to navigate images\n"
             "• Click 'Run Full Pipeline' to process\n"
-            "• Right panel shows text detection results\n"
-            "• OCR results appear below"
+            "• Assign characters and add translations\n"
+            "• Manage characters via button above"
         )
         instructions_label.setStyleSheet("""
             color: var(--text-secondary);
@@ -216,7 +266,7 @@ class ControlPanel(QWidget):
         self.run_button.setEnabled(False)
         self.progress_label.setText("Initializing pipeline...")
         self.progress_label.show()
-        self.ocr_text_edit.setPlainText("Processing...")
+        self.ocr_table.setRowCount(0)  # Clear table
     
     def on_folder_loaded(self, folder_path: str):
         """Handle folder loaded"""
@@ -226,7 +276,6 @@ class ControlPanel(QWidget):
         # Update status
         folder_name = folder_path.split('/')[-1] or folder_path
         self.status_label.setText(f"Folder loaded: {folder_name}")
-        
     
     def on_ocr_result(self, index: int, texts: list):
         """Handle OCR results"""
@@ -249,24 +298,160 @@ class ControlPanel(QWidget):
             self.update_ocr_display(self.ocr_results[index])
         else:
             self.logger.warning(f"[CONTROL] No OCR results for index {index} yet")
-            self.ocr_text_edit.setPlainText("No OCR results for this image yet.")
+            self.ocr_table.setRowCount(0)
             
     def update_current_image_label(self, index: int):
         """Update current image label"""
         self.current_image_label.setText(f"Current Image: {index + 1}")
     
     def update_ocr_display(self, texts: list):
-        """Update OCR text display"""
+        """Update OCR table display với danh sách texts"""
+        from core.project_manager import ProjectManager
         
-        if texts and any(text.strip() for text in texts):
-            ocr_text = "\n".join([f"• {text}" for text in texts if text.strip()])
-            self.ocr_text_edit.setPlainText(ocr_text)
-        else:
-            self.ocr_text_edit.setPlainText("No text detected")
+        if not texts or not any(text.strip() for text in texts):
+            self.ocr_table.setRowCount(0)
             self.logger.warning(f"[CONTROL] No valid text to display")
+            return
+        
+        project_manager = ProjectManager()
+        characters = project_manager.get_characters()
+        
+        # Clear table
+        self.ocr_table.setRowCount(0)
+        
+        # Populate table
+        valid_texts = [text for text in texts if text.strip()]
+        
+        for i, text in enumerate(valid_texts):
+            row_position = self.ocr_table.rowCount()
+            self.ocr_table.insertRow(row_position)
+            
+            # Column 0: STT
+            stt_item = QTableWidgetItem(str(i + 1))
+            stt_item.setFlags(stt_item.flags() & ~Qt.ItemIsEditable)  # Read-only
+            self.ocr_table.setItem(row_position, 0, stt_item)
+            
+            # Column 1: Character ComboBox
+            char_combo = QComboBox()
+            char_combo.addItem("-- Chọn nhân vật --", None)
+            
+            for char in characters:
+                char_combo.addItem(char['name'], char['id'])
+            
+            char_combo.currentIndexChanged.connect(
+                lambda idx, row=row_position: self.on_character_changed(row, idx)
+            )
+            
+            self.ocr_table.setCellWidget(row_position, 1, char_combo)
+            
+            # Column 2: Bản gốc (Read-only)
+            original_item = QTableWidgetItem(text)
+            original_item.setFlags(original_item.flags() & ~Qt.ItemIsEditable)
+            self.ocr_table.setItem(row_position, 2, original_item)
+            
+            # Column 3: Bản dịch (Editable)
+            translated_item = QTableWidgetItem("")
+            self.ocr_table.setItem(row_position, 3, translated_item)
+        
+        # Tự động điều chỉnh chiều cao table sau khi populate
+        self.adjust_table_height()
+    
+    def adjust_table_height(self):
+        """Tự động điều chỉnh chiều cao table dựa trên số rows"""
+        row_count = self.ocr_table.rowCount()
+        
+        if row_count == 0:
+            self.ocr_table.setMinimumHeight(200)
+            return
+        
+        # Tính chiều cao header
+        header_height = self.ocr_table.horizontalHeader().height()
+        
+        # Tính tổng chiều cao của các rows (tối đa 10 rows)
+        total_row_height = 0
+        visible_rows = min(row_count, 10)
+        
+        for row in range(visible_rows):
+            total_row_height += self.ocr_table.rowHeight(row)
+        
+        # Tổng chiều cao = header + rows + margin
+        total_height = header_height + total_row_height + 20
+        
+        # Giới hạn chiều cao
+        min_height = 200
+        max_height = 550
+        
+        calculated_height = max(min_height, min(total_height, max_height))
+        
+        self.ocr_table.setMinimumHeight(calculated_height)
     
     def on_processing_complete(self):
         """Handle processing complete"""
         self.status_label.setText("Processing complete!")
         self.run_button.setEnabled(True)
         self.progress_label.hide()
+        
+    def on_manage_characters(self):
+        """Mở dialog quản lý characters"""
+        from .character_manager_dialog import CharacterManagerDialog
+        
+        dialog = CharacterManagerDialog(self)
+        if dialog.exec():
+            # Cập nhật lại ComboBox trong table sau khi thay đổi characters
+            self.refresh_character_comboboxes()
+    
+    def refresh_character_comboboxes(self):
+        """Cập nhật lại tất cả ComboBox character trong table"""
+        from core.project_manager import ProjectManager
+        
+        project_manager = ProjectManager()
+        characters = project_manager.get_characters()
+        
+        for row in range(self.ocr_table.rowCount()):
+            combo = self.ocr_table.cellWidget(row, 1)
+            if combo:
+                current_char = combo.currentText()
+                combo.clear()
+                combo.addItem("-- Chọn nhân vật --", None)
+                
+                for char in characters:
+                    combo.addItem(char['name'], char['id'])
+                
+                # Khôi phục lựa chọn cũ nếu còn tồn tại
+                index = combo.findText(current_char)
+                if index >= 0:
+                    combo.setCurrentIndex(index)
+    
+    def on_character_changed(self, row: int, combo_index: int):
+        """Handle khi user thay đổi character cho một dòng"""
+        combo = self.ocr_table.cellWidget(row, 1)
+        if combo:
+            char_id = combo.currentData()
+            char_name = combo.currentText()
+            
+            if char_id:
+                self.logger.info(f"Row {row}: Character changed to {char_name} (ID: {char_id})")
+            else:
+                self.logger.info(f"Row {row}: No character selected")
+    
+    def get_ocr_table_data(self) -> list:
+        """Lấy dữ liệu từ table để lưu vào project"""
+        data = []
+        
+        for row in range(self.ocr_table.rowCount()):
+            combo = self.ocr_table.cellWidget(row, 1)
+            original_item = self.ocr_table.item(row, 2)
+            translated_item = self.ocr_table.item(row, 3)
+            
+            char_id = combo.currentData() if combo else None
+            original_text = original_item.text() if original_item else ""
+            translated_text = translated_item.text() if translated_item else ""
+            
+            data.append({
+                'index': row,
+                'character_id': char_id,
+                'original_text': original_text,
+                'translated_text': translated_text
+            })
+        
+        return data
