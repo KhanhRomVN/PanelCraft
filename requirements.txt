@@ -8,3 +8,5 @@ tqdm
 numpy
 onnxruntime
 opencv-python
+manga-ocr
+torchaudio

@@ -73,9 +73,7 @@ class ImageLoader(QObject):
         if self.loader_thread and self.loader_thread.isRunning():
             self.logger.warning("Image loading already in progress")
             return
-        
-        self.logger.info(f"Starting to load {len(image_paths)} images")
-        
+                
         self.loader_thread = ImageLoaderThread(image_paths)
         self.loader_thread.images_loaded.connect(self.on_images_loaded)
         self.loader_thread.error_occurred.connect(self.on_error)
@@ -83,7 +81,6 @@ class ImageLoader(QObject):
     
     def on_images_loaded(self, image_paths: List[str]):
         """Handle images loaded"""
-        self.logger.info(f"Successfully loaded {len(image_paths)} images")
         self.images_loaded.emit(image_paths)
     
     def on_error(self, error_msg: str):

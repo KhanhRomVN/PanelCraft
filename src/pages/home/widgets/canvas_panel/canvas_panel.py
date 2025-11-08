@@ -11,6 +11,7 @@ from widget.common.custom_button import CustomButton
 from widget.common.custom_modal import CustomModal
 from ...services.image_loader import ImageLoader
 from ...services.segmentation_processor import SegmentationProcessor
+from ...services.manga_pipeline_processor import MangaPipelineProcessor
 
 
 class ImageDisplayWidget(QWidget):
@@ -136,6 +137,8 @@ class CanvasPanel(QWidget):
     folder_selected = Signal(str)
     image_changed = Signal(int)  # Current index
     segmentation_completed = Signal(int, QImage)  # index, result image
+    text_detection_completed = Signal(int, QImage)  # Thêm signal mới
+    ocr_completed = Signal(int, list)  # Thêm signal mới
     
     def __init__(self):
         super().__init__()
@@ -144,9 +147,12 @@ class CanvasPanel(QWidget):
         self.image_paths: List[str] = []
         self.current_index: int = 0
         self.segmentation_results: dict = {}  # {index: QImage}
+        self.text_detection_results: dict = {}  # {index: QImage} - Thêm dictionary mới
+        self.ocr_results: dict = {}  # {index: list} - Thêm dictionary mới
         
         self.image_loader = ImageLoader()
         self.segmentation_processor: Optional[SegmentationProcessor] = None
+        self.manga_pipeline_processor: Optional[MangaPipelineProcessor] = None
         
         self.setup_ui()
         self.setup_connections()
@@ -162,7 +168,7 @@ class CanvasPanel(QWidget):
         layout.addWidget(self.left_panel, 1)
         
         # Right panel - Segmentation result
-        self.right_panel = ImageDisplayWidget("Segmentation Result")
+        self.right_panel = ImageDisplayWidget("Processing Results")
         layout.addWidget(self.right_panel, 1)
         
         # Apply focus to receive keyboard events
@@ -204,12 +210,10 @@ class CanvasPanel(QWidget):
         )
         
         if folder:
-            self.logger.info(f"Selected folder: {folder}")
             self.load_folder(folder)
     
     def load_folder(self, folder_path: str):
         """Load folder với validation"""
-        self.logger.info(f"Loading folder: {folder_path}")
         
         # Scan folder for valid images
         valid_extensions = ('.jpg', '.jpeg', '.png')
@@ -280,10 +284,7 @@ class CanvasPanel(QWidget):
         result = modal.exec()
         
         if result == CustomModal.Accepted:
-            self.logger.info("User chose to continue with valid files only")
             self.process_valid_files(valid_files, folder_path)
-        else:
-            self.logger.info("User cancelled folder loading")
     
     def process_valid_files(self, valid_files: List[str], folder_path: str):
         """Xử lý các file hợp lệ"""
@@ -294,9 +295,7 @@ class CanvasPanel(QWidget):
                 "Không tìm thấy file ảnh hợp lệ trong thư mục."
             )
             return
-        
-        self.logger.info(f"Loading {len(valid_files)} valid images")
-        
+                
         # Sort files
         valid_files.sort()
         
@@ -311,8 +310,8 @@ class CanvasPanel(QWidget):
         self.image_paths = image_paths
         self.current_index = 0
         self.segmentation_results.clear()
-        
-        self.logger.info(f"Loaded {len(image_paths)} images")
+        self.text_detection_results.clear()
+        self.ocr_results.clear()
         
         # Display first image
         if self.image_paths:
@@ -323,60 +322,84 @@ class CanvasPanel(QWidget):
     
     def on_load_error(self, error_msg: str):
         """Handle load error"""
-        self.logger.error(f"Load error: {error_msg}")
+        self.logger.error(f"[ERROR] Load error: {error_msg}")
         QMessageBox.critical(self, "Lỗi", error_msg)
     
     def display_current_image(self):
-        """Hiển thị ảnh hiện tại"""
+        """Hiển thị ảnh hiện tại với khả năng hiển thị kết quả pipeline"""
         if not self.image_paths or self.current_index >= len(self.image_paths):
+            self.logger.warning(f"[DISPLAY] Cannot display - no images or invalid index: {self.current_index}")
             return
         
         current_path = self.image_paths[self.current_index]
+        
+        # Display original image on left panel
         self.left_panel.set_image(image_path=current_path)
         
-        # Display segmentation result if available
+        # Priority: Segmentation (Step 5 - Final Result) > Text Detection > Nothing
+        # Chú ý: segmentation_results chứa kết quả STEP 5 từ pipeline
         if self.current_index in self.segmentation_results:
             result_qimage = self.segmentation_results[self.current_index]
             pixmap = QPixmap.fromImage(result_qimage)
             self.right_panel.set_image(pixmap=pixmap)
+        elif self.current_index in self.text_detection_results:
+            result_qimage = self.text_detection_results[self.current_index]
+            pixmap = QPixmap.fromImage(result_qimage)
+            self.right_panel.set_image(pixmap=pixmap)
         else:
             self.right_panel.clear()
+            self.logger.warning(f"[DISPLAY] Right panel: NO RESULTS available for index {self.current_index}")
         
+        # Emit signal for control panel
         self.image_changed.emit(self.current_index)
-        
-        self.logger.debug(f"Displaying image {self.current_index + 1}/{len(self.image_paths)}")
     
     def previous_image(self):
         """Chuyển về ảnh trước"""
         if self.image_paths and self.current_index > 0:
+            old_index = self.current_index
             self.current_index -= 1
             self.display_current_image()
+        else:
+            self.logger.warning(f"[NAVIGATE] Cannot go previous - at first image or no images")
     
     def next_image(self):
         """Chuyển sang ảnh sau"""
         if self.image_paths and self.current_index < len(self.image_paths) - 1:
+            old_index = self.current_index
             self.current_index += 1
             self.display_current_image()
+        else:
+            self.logger.warning(f"[NAVIGATE] Cannot go next - at last image or no images")
     
     def start_segmentation(self):
-        """Bắt đầu segmentation cho tất cả ảnh"""
+        """Bắt đầu full manga pipeline (5 steps)"""
         if not self.image_paths:
+            self.logger.warning("[PIPELINE] Cannot start - no images loaded")
             QMessageBox.warning(self, "Cảnh báo", "Chưa load ảnh nào.")
             return
         
-        self.logger.info("Starting segmentation for all images")
+        # Initialize manga pipeline processor
+        if not self.manga_pipeline_processor:
+            self.manga_pipeline_processor = MangaPipelineProcessor()
+            
+            # Connect signals
+            self.manga_pipeline_processor.result_ready.connect(self.on_final_result)
+            self.manga_pipeline_processor.ocr_result_ready.connect(self.on_ocr_result)  # THÊM DÒNG NÀY
+            self.manga_pipeline_processor.progress_updated.connect(self.on_pipeline_progress)
+            self.manga_pipeline_processor.error_occurred.connect(self.on_pipeline_error)
+            self.manga_pipeline_processor.completed.connect(self.on_pipeline_completed)
         
-        # Initialize segmentation processor
-        if not self.segmentation_processor:
-            self.segmentation_processor = SegmentationProcessor()
-            self.segmentation_processor.result_ready.connect(self.on_segmentation_result)
-            self.segmentation_processor.error_occurred.connect(self.on_segmentation_error)
+        # Clear previous results
+        self.segmentation_results.clear()
+        self.text_detection_results.clear()
+        self.ocr_results.clear()
         
         # Start processing
-        self.segmentation_processor.process_images(self.image_paths)
+        self.manga_pipeline_processor.process_images(self.image_paths)
     
     def on_segmentation_result(self, index: int, result_image: QImage):
-        """Handle segmentation result"""
+        """Handle segmentation result - KHÔNG DÙNG NỮA (chỉ dùng on_final_result)"""
+        self.logger.warning(f"[RESULT] on_segmentation_result called (deprecated) - index: {index}")
         self.segmentation_results[index] = result_image
         
         # Update display if this is the current image
@@ -385,10 +408,68 @@ class CanvasPanel(QWidget):
             self.right_panel.set_image(pixmap=pixmap)
         
         self.segmentation_completed.emit(index, result_image)
+    
+    def on_text_detection_result(self, index: int, result_image: QImage):
+        """Handle text detection result - KHÔNG DÙNG NỮA"""
+        self.logger.warning(f"[RESULT] on_text_detection_result called (deprecated) - index: {index}")
+        self.text_detection_results[index] = result_image
         
-        self.logger.info(f"Segmentation completed for image {index + 1}/{len(self.image_paths)}")
+        # Update display if this is the current image
+        if index == self.current_index:
+            pixmap = QPixmap.fromImage(result_image)
+            self.right_panel.set_image(pixmap=pixmap)
+        
+        self.text_detection_completed.emit(index, result_image)
+            
+    def on_ocr_result(self, index: int, texts: list):
+        """Handle OCR result from original segments"""
+        
+        # Store result
+        self.ocr_results[index] = texts
+        
+        # Emit signal để ControlPanel có thể hiển thị kết quả OCR
+        self.ocr_completed.emit(index, texts)
+            
+    def on_pipeline_completed(self):
+        """Handle pipeline completion"""
+        QMessageBox.information(
+            self, 
+            "Hoàn thành", 
+            f"Đã xử lý xong {len(self.image_paths)} ảnh!\n\n"
+            "Pipeline gồm 5 bước:\n"
+            "1. Segmentation (YOLOv8)\n"
+            "2. Tạo blank canvas\n"
+            "3. Text detection & removal\n"
+            "4. Cập nhật segments\n"
+            "5. Paste lại ảnh gốc (Final Result)"
+        )
     
     def on_segmentation_error(self, error_msg: str):
         """Handle segmentation error"""
-        self.logger.error(f"Segmentation error: {error_msg}")
+        self.logger.error(f"[ERROR] Segmentation error: {error_msg}")
         QMessageBox.critical(self, "Lỗi Segmentation", error_msg)
+        
+    def on_final_result(self, index: int, result_image: QImage):
+        """Handle final result từ pipeline (Step 5 - Final composition)"""
+        
+        # Lưu vào segmentation_results để có thể navigate
+        self.segmentation_results[index] = result_image
+        
+        # Update display nếu đây là ảnh hiện tại
+        if index == self.current_index:
+            pixmap = QPixmap.fromImage(result_image)
+            self.right_panel.set_image(pixmap=pixmap)
+        
+        # Emit signal
+        self.segmentation_completed.emit(index, result_image)
+            
+    def on_pipeline_progress(self, current: int, total: int, step: str):
+        """Handle pipeline progress updates"""
+        
+        # Cập nhật status text nếu có status bar
+        status_text = f"Processing {current}/{total}: {step}"
+    
+    def on_pipeline_error(self, error_msg: str):
+        """Handle pipeline error"""
+        self.logger.error(f"Pipeline error: {error_msg}")
+        QMessageBox.critical(self, "Lỗi Pipeline", error_msg)

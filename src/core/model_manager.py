@@ -40,8 +40,6 @@ class ModelDownloadThread(QThread):
     def run(self):
         """Tải file từ URL"""
         try:
-            self.logger.info(f"Downloading {self.model_info.name} from {self.model_info.url}")
-            
             response = requests.get(self.model_info.url, stream=True, timeout=30)
             response.raise_for_status()
             
@@ -79,7 +77,7 @@ class ModelDownloadThread(QThread):
 class ModelManager(QObject):
     """Quản lý việc kiểm tra và tải models"""
     
-    # Danh sách models cần thiết
+    # Danh sách models cần thiết - ĐÃ MỞ RỘNG
     REQUIRED_MODELS = [
         # Text Detection
         ModelInfo(
@@ -125,6 +123,13 @@ class ModelManager(QObject):
             filename="tokenizer_config.json",
             category="ocr",
             size_mb=0.001
+        ),
+        ModelInfo(
+            name="Manga OCR Vocab",
+            url="https://huggingface.co/kha-white/manga-ocr-base/resolve/main/vocab.txt",
+            filename="vocab.txt",
+            category="ocr",
+            size_mb=0.5
         ),
         
         # Segmentation Models
@@ -210,3 +215,17 @@ class ModelManager(QObject):
         """Kiểm tra xem đã setup đầy đủ models chưa"""
         missing = self.check_missing_models()
         return len(missing) == 0 and self.model_path is not None
+    
+    def get_model_by_category(self, category: str) -> Optional[ModelInfo]:
+        """Lấy model theo category"""
+        for model in self.REQUIRED_MODELS:
+            if model.category == category:
+                return model
+        return None
+    
+    def get_model_by_name(self, name: str) -> Optional[ModelInfo]:
+        """Lấy model theo tên"""
+        for model in self.REQUIRED_MODELS:
+            if model.name == name:
+                return model
+        return None

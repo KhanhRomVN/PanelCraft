@@ -36,7 +36,6 @@ class Application(QApplication):
             
             # Kiểm tra xem có cần tải models không
             if not self.model_manager.is_setup_complete():
-                self.logger.info("Models chưa đầy đủ, hiển thị modal tải xuống")
                 
                 # Hiển thị modal tải models
                 modal = ModelDownloadModal(self.model_manager)
@@ -50,7 +49,6 @@ class Application(QApplication):
             self.main_window = MainWindow(self.config, self.theme_manager)
             self.main_window.show()
             
-            self.logger.info("Application initialized successfully")
             return True
             
         except Exception as e:
