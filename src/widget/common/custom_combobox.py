@@ -206,7 +206,7 @@ class CustomCombobox(QWidget):
         self.filtered_options = [
             opt for opt in self._options 
             if text.lower() in opt.get("label", "").lower() 
-            or text.lower() in opt.get("value", "").lower()
+            or text.lower() in str(opt.get("value", "")).lower()
         ]
         
         # Update combobox with filtered options

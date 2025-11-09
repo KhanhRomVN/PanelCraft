@@ -48,7 +48,7 @@ class FontManager:
                 json.dump(self.settings, f, ensure_ascii=False, indent=2)
             return True
         except Exception as e:
-            self.logger.error(f"Failed to save font settings: {e}")
+            self.logger.error(f"Failed to save font settings: {e}") 
             return False
     
     def get_visible_fonts(self) -> List[str]:
