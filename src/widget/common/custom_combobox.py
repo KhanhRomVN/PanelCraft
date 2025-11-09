@@ -127,8 +127,12 @@ class CustomCombobox(QWidget):
                 border-radius: 6px;
                 color: var(--text-primary);
             }}
+            QComboBox:hover {{
+                border-color: var(--primary);
+            }}
             QComboBox:focus {{
                 border-color: var(--primary);
+                outline: none;
             }}
             QComboBox::drop-down {{
                 border: none;
@@ -146,10 +150,15 @@ class CustomCombobox(QWidget):
                 border-radius: 6px;
                 selection-background-color: var(--dropdown-item-hover);
                 color: var(--text-primary);
+                outline: none;
             }}
         """
         
-        self.combobox.setStyleSheet(style)
+        try:
+            self.combobox.setStyleSheet(style)
+        except Exception as e:
+            # Fallback nếu style không apply được
+            self.combobox.setStyleSheet("QComboBox { background-color: white; }")
     
     def setup_connections(self):
         """Setup signal connections"""
@@ -280,7 +289,7 @@ class CustomCombobox(QWidget):
             return self._selected_values
         return self.combobox.currentData()
     
-    def setCurrentValue(self, value):
+    def setCurrentValue(self, value):   
         """Set current value"""
         if self._multiple and isinstance(value, list):
             self._selected_values = value

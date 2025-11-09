@@ -49,6 +49,9 @@ class CustomTable(QWidget):
         self.table_widget.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table_widget.setAlternatingRowColors(True)
         
+        # ẨN vertical header (cột row numbers bên trái)
+        self.table_widget.verticalHeader().setVisible(False)
+        
         # Configure header
         header = self.table_widget.horizontalHeader()
         
@@ -187,7 +190,11 @@ class CustomTable(QWidget):
         end_idx = start_idx + self._page_size
         page_data = self._data[start_idx:end_idx]
         
+        # Set CHÍNH XÁC số dòng (không thêm dòng trống)
         self.table_widget.setRowCount(len(page_data))
+        
+        # Clear tất cả items cũ trước khi populate
+        self.table_widget.clearContents()
         
         # Populate table
         for row, item in enumerate(page_data):

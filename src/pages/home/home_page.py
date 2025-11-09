@@ -65,6 +65,33 @@ class HomePage(QWidget):
         # Ctrl+O to open folder
         self.open_folder_shortcut = QShortcut(QKeySequence("Ctrl+O"), self)
         self.open_folder_shortcut.activated.connect(self.on_open_folder)
+        
+    def cleanup(self):
+        """Cleanup signals và connections trước khi đóng"""
+        try:
+            # Disconnect canvas panel signals
+            if hasattr(self, 'canvas_panel'):
+                self.canvas_panel.folder_selected.disconnect()
+                self.canvas_panel.image_changed.disconnect()
+                self.canvas_panel.segmentation_completed.disconnect()
+                self.canvas_panel.ocr_completed.disconnect()
+                self.canvas_panel.ocr_region_selected.disconnect()
+                self.canvas_panel.ocr_region_result_ready.disconnect()
+                self.canvas_panel.panel_visibility_changed.disconnect()
+            
+            # Disconnect control panel signals
+            if hasattr(self, 'control_panel'):
+                self.control_panel.run_model_requested.disconnect()
+                self.control_panel.ocr_mode_toggled.disconnect()
+            
+            self.logger.info("[HOME] Cleanup completed")
+        except Exception as e:
+            self.logger.error(f"[HOME] Error during cleanup: {e}")
+    
+    def closeEvent(self, event):
+        """Override close event để cleanup"""
+        self.cleanup()
+        super().closeEvent(event)
             
     def setup_connections(self):
         """Setup signal connections"""
@@ -75,12 +102,18 @@ class HomePage(QWidget):
         self.canvas_panel.ocr_completed.connect(self.control_panel.on_ocr_result)
         self.canvas_panel.ocr_region_selected.connect(self.on_ocr_region_selected)
         
+        # THÊM: Connect OCR region result signal
+        self.canvas_panel.ocr_region_result_ready.connect(self.on_ocr_region_result)
+        
         # Connect panel visibility signals
         self.canvas_panel.panel_visibility_changed.connect(self.on_canvas_panel_visibility_changed)
         
         # Connect control panel signals
         self.control_panel.run_model_requested.connect(self.on_run_model)
         self.control_panel.ocr_mode_toggled.connect(self.on_ocr_mode_toggled)
+        
+        # Connect OCR region result từ canvas_panel
+        self.canvas_panel.ocr_region_result_ready.connect(self.on_ocr_region_result)
         
         # Connect internal signals
         self.folder_selected.connect(self.control_panel.on_folder_loaded)
@@ -141,3 +174,10 @@ class HomePage(QWidget):
         
         # Placeholder: In ra log
         self.logger.info(f"[HOME] Would run OCR on region ({x}, {y}, {w}, {h}) of image {image_index}")
+        
+    def on_ocr_region_result(self, text: str):
+        """Handle khi OCR region processing hoàn thành"""
+        self.logger.info(f"[HOME] OCR region result received: {text[:50]}...")
+        
+        # Forward kết quả OCR đến control panel để update vào row đang focus
+        self.control_panel.on_ocr_region_result(text)

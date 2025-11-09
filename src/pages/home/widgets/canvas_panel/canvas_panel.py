@@ -60,6 +60,9 @@ class ImageDisplayWidget(QWidget):
         self.image_label = InteractiveImageLabel()
         self.image_label.setText("No image loaded")
         
+        # THÊM: Connect OCR region selected signal
+        self.image_label.ocr_region_selected.connect(self.on_ocr_region_selected_internal)
+        
         scroll_area.setWidget(self.image_label)
         layout.addWidget(scroll_area)
     
@@ -94,505 +97,38 @@ class ImageDisplayWidget(QWidget):
         """Lấy danh sách rectangles hiện tại (sau khi drag)"""
         return self.image_label.get_rectangles()
     
-    def on_ocr_region_selected(self, x: int, y: int, w: int, h: int):
-        """Handle khi user chọn vùng OCR bằng drag"""
-        # Emit signal lên CanvasPanel để xử lý
-        if hasattr(self.parent(), 'on_ocr_region_selected'):
-            self.parent().on_ocr_region_selected(x, y, w, h)
-    
-    def enable_ocr_drag(self):
-        """Bật chế độ OCR drag"""
-        self._ocr_mode = True
-        self.setCursor(Qt.CrossCursor)
-    
-    def disable_ocr_drag(self):
-        """Tắt chế độ OCR drag"""
-        self._ocr_mode = False
-        self._ocr_drag_rect = None
-        self.setCursor(Qt.ArrowCursor)
-        self.updateDisplay()
-    
-class InteractiveImageLabel(QLabel):
-    """QLabel với khả năng drag-and-drop và resize rectangles"""
-    
-    # Resize modes
-    RESIZE_NONE = 0
-    RESIZE_TOP_LEFT = 1
-    RESIZE_TOP = 2
-    RESIZE_TOP_RIGHT = 3
-    RESIZE_RIGHT = 4
-    RESIZE_BOTTOM_RIGHT = 5
-    RESIZE_BOTTOM = 6
-    RESIZE_BOTTOM_LEFT = 7
-    RESIZE_LEFT = 8
-    MOVE = 9
-    
-    def __init__(self):
-        super().__init__()
-        self._pixmap: Optional[QPixmap] = None
-        self._rectangles: List[dict] = []
-        self._active_rect_id: Optional[int] = None
-        self._resize_mode: int = self.RESIZE_NONE
-        self._drag_start_pos = None
-        self._rect_original_geometry = None
-        self._handle_size = 8
+    def on_ocr_region_selected_internal(self, x: int, y: int, w: int, h: int):
+        """Handle khi user chọn vùng OCR từ InteractiveImageLabel"""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[IMAGE_DISPLAY] OCR region received: x={x}, y={y}, w={w}, h={h}")
         
-        # OCR drag mode
-        self._ocr_mode: bool = False
-        self._ocr_drag_start = None
-        self._ocr_drag_rect = None
+        # Tìm CanvasPanel (parent của parent vì ImageDisplayWidget nằm trong QSplitter)
+        canvas_panel = None
+        parent = self.parent()
         
-        self.setAlignment(Qt.AlignCenter)
-        self.setMouseTracking(True)
-        self.setStyleSheet("""
-            QLabel {
-                background-color: var(--card-background);
-                padding: 8px;
-            }
-        """)
-    
-    def setPixmap(self, pixmap: QPixmap):
-        """Override setPixmap"""
-        if pixmap:
-            self._pixmap = pixmap
-            self.updateDisplay()
+        # Duyệt lên để tìm CanvasPanel
+        while parent is not None:
+            if hasattr(parent, 'on_ocr_region_selected') and parent.__class__.__name__ == 'CanvasPanel':
+                canvas_panel = parent
+                break
+            parent = parent.parent()
+        
+        if canvas_panel:
+            logger.info(f"[IMAGE_DISPLAY] Found CanvasPanel, forwarding OCR region")
+            canvas_panel.on_ocr_region_selected(x, y, w, h)
         else:
-            self._pixmap = None
-            super().setPixmap(QPixmap())
-    
-    def set_rectangles(self, rectangles: List[dict]):
-        """Set danh sách rectangles"""
-        self._rectangles = rectangles.copy() if rectangles else []
-        self.updateDisplay()
-    
-    def get_rectangles(self) -> List[dict]:
-        """Get danh sách rectangles hiện tại"""
-        return self._rectangles.copy()
+            logger.error(f"[IMAGE_DISPLAY] Could not find CanvasPanel in parent hierarchy")
     
     def enable_ocr_mode(self):
-        """Bật chế độ OCR drag-and-drop"""
+        """Bật chế độ OCR drag"""
         self.ocr_mode_enabled = True
-        self.image_label.enable_ocr_drag()
+        self.image_label.enable_ocr_mode()
     
     def disable_ocr_mode(self):
-        """Tắt chế độ OCR drag-and-drop"""
+        """Tắt chế độ OCR drag"""
         self.ocr_mode_enabled = False
-        self.image_label.disable_ocr_drag()
-    
-    def resizeEvent(self, event):
-        """Auto resize khi label resize"""
-        super().resizeEvent(event)
-        if self._pixmap:
-            self.updateDisplay()
-    
-    def updateDisplay(self):
-        """Vẽ pixmap + rectangles"""
-        if not self._pixmap or self._pixmap.isNull():
-            return
-        
-        # Scale pixmap
-        available_width = self.width() - 16
-        available_height = self.height() - 16
-        
-        if available_width <= 0 or available_height <= 0:
-            return
-        
-        scaled_pixmap = self._pixmap.scaled(
-            available_width,
-            available_height,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation
-        )
-        
-        # Vẽ rectangles lên pixmap
-        if self._rectangles:
-            from PySide6.QtGui import QPainter, QPen, QBrush
-            from PySide6.QtCore import QRect, QRectF
-            
-            # Copy pixmap để vẽ
-            display_pixmap = scaled_pixmap.copy()
-            painter = QPainter(display_pixmap)
-            
-            # Calculate scale ratio
-            scale_x = scaled_pixmap.width() / self._pixmap.width()
-            scale_y = scaled_pixmap.height() / self._pixmap.height()
-            
-            # Vẽ từng rectangle
-            pen = QPen(Qt.red, 2)
-            painter.setPen(pen)
-            painter.setBrush(Qt.NoBrush)  # QUAN TRỌNG: Không fill rectangle
-            
-            for idx, rect in enumerate(self._rectangles):
-                # Scale coordinates
-                x = int(rect['x'] * scale_x)
-                y = int(rect['y'] * scale_y)
-                w = int(rect['w'] * scale_x)
-                h = int(rect['h'] * scale_y)
-                
-                painter.drawRect(QRect(x, y, w, h))
-                
-                # Vẽ số thứ tự ở góc phải trên (ngoài cùng rectangle)
-                from PySide6.QtGui import QFont
-                number_text = str(idx + 1)
-                font = QFont()
-                font.setPointSize(12)
-                font.setBold(True)
-                painter.setFont(font)
-                
-                # Tính kích thước text để vẽ background
-                from PySide6.QtGui import QFontMetrics
-                fm = QFontMetrics(font)
-                text_width = fm.horizontalAdvance(number_text)
-                text_height = fm.height()
-                
-                # Vị trí: góc phải trên, ngoài cùng rectangle
-                number_x = x + w + 5
-                number_y = y - 5
-                
-                # Vẽ background cho số (hình chữ nhật nhỏ)
-                painter.setBrush(QBrush(Qt.red))
-                painter.setPen(Qt.NoPen)
-                padding = 4
-                painter.drawRect(
-                    number_x - padding,
-                    number_y - text_height - padding,
-                    text_width + 2 * padding,
-                    text_height + 2 * padding
-                )
-                
-                # Vẽ text số màu trắng
-                painter.setPen(QPen(Qt.white))
-                painter.drawText(number_x, number_y - padding, number_text)
-                
-                # Reset pen và brush
-                painter.setPen(QPen(Qt.red, 2))
-                painter.setBrush(Qt.NoBrush)
-                
-                # Vẽ handles nếu đây là rect đang active
-                if rect['id'] == self._active_rect_id:
-                    handle_size = self._handle_size
-                    painter.setBrush(QBrush(Qt.red))  # CHỈ fill handles
-                    
-                    # 4 góc
-                    painter.drawRect(x - handle_size//2, y - handle_size//2, handle_size, handle_size)  # Top-left
-                    painter.drawRect(x + w - handle_size//2, y - handle_size//2, handle_size, handle_size)  # Top-right
-                    painter.drawRect(x + w - handle_size//2, y + h - handle_size//2, handle_size, handle_size)  # Bottom-right
-                    painter.drawRect(x - handle_size//2, y + h - handle_size//2, handle_size, handle_size)  # Bottom-left
-                    
-                    # 4 cạnh (mid points)
-                    painter.drawRect(x + w//2 - handle_size//2, y - handle_size//2, handle_size, handle_size)  # Top
-                    painter.drawRect(x + w - handle_size//2, y + h//2 - handle_size//2, handle_size, handle_size)  # Right
-                    painter.drawRect(x + w//2 - handle_size//2, y + h - handle_size//2, handle_size, handle_size)  # Bottom
-                    painter.drawRect(x - handle_size//2, y + h//2 - handle_size//2, handle_size, handle_size)  # Left
-                    
-                    painter.setBrush(Qt.NoBrush)  # QUAN TRỌNG: Reset brush sau khi vẽ handles
-            
-            painter.end()
-            
-            # Vẽ OCR drag rectangle nếu đang drag
-            if self._ocr_drag_rect:
-                painter_ocr = QPainter(display_pixmap)
-                painter_ocr.setPen(QPen(Qt.blue, 3, Qt.DashLine))
-                painter_ocr.setBrush(Qt.NoBrush)
-                
-                x, y, w, h = self._ocr_drag_rect
-                painter_ocr.drawRect(int(x), int(y), int(w), int(h))
-                
-                painter_ocr.end()
-            
-            super().setPixmap(display_pixmap)
-        else:
-            # Vẽ OCR drag rectangle nếu không có rectangles nhưng đang drag OCR
-            if self._ocr_drag_rect:
-                display_pixmap = scaled_pixmap.copy()
-                painter_ocr = QPainter(display_pixmap)
-                painter_ocr.setPen(QPen(Qt.blue, 3, Qt.DashLine))
-                painter_ocr.setBrush(Qt.NoBrush)
-                
-                x, y, w, h = self._ocr_drag_rect
-                painter_ocr.drawRect(int(x), int(y), int(w), int(h))
-                
-                painter_ocr.end()
-                super().setPixmap(display_pixmap)
-            else:
-                super().setPixmap(scaled_pixmap)
-    
-    def _get_resize_mode(self, orig_x: int, orig_y: int, rect: dict) -> int:
-        """Xác định resize mode dựa trên vị trí click"""
-        x, y, w, h = rect['x'], rect['y'], rect['w'], rect['h']
-        tolerance = self._handle_size
-        
-        # Check corners first (priority)
-        if abs(orig_x - x) <= tolerance and abs(orig_y - y) <= tolerance:
-            return self.RESIZE_TOP_LEFT
-        if abs(orig_x - (x + w)) <= tolerance and abs(orig_y - y) <= tolerance:
-            return self.RESIZE_TOP_RIGHT
-        if abs(orig_x - (x + w)) <= tolerance and abs(orig_y - (y + h)) <= tolerance:
-            return self.RESIZE_BOTTOM_RIGHT
-        if abs(orig_x - x) <= tolerance and abs(orig_y - (y + h)) <= tolerance:
-            return self.RESIZE_BOTTOM_LEFT
-        
-        # Check edges
-        if abs(orig_y - y) <= tolerance and x <= orig_x <= x + w:
-            return self.RESIZE_TOP
-        if abs(orig_x - (x + w)) <= tolerance and y <= orig_y <= y + h:
-            return self.RESIZE_RIGHT
-        if abs(orig_y - (y + h)) <= tolerance and x <= orig_x <= x + w:
-            return self.RESIZE_BOTTOM
-        if abs(orig_x - x) <= tolerance and y <= orig_y <= y + h:
-            return self.RESIZE_LEFT
-        
-        # Inside rectangle = move
-        if x <= orig_x <= x + w and y <= orig_y <= y + h:
-            return self.MOVE
-        
-        return self.RESIZE_NONE
-    
-    def _get_cursor_for_mode(self, mode: int):
-        """Trả về cursor phù hợp với resize mode"""
-        cursor_map = {
-            self.RESIZE_TOP_LEFT: Qt.SizeFDiagCursor,
-            self.RESIZE_TOP: Qt.SizeVerCursor,
-            self.RESIZE_TOP_RIGHT: Qt.SizeBDiagCursor,
-            self.RESIZE_RIGHT: Qt.SizeHorCursor,
-            self.RESIZE_BOTTOM_RIGHT: Qt.SizeFDiagCursor,
-            self.RESIZE_BOTTOM: Qt.SizeVerCursor,
-            self.RESIZE_BOTTOM_LEFT: Qt.SizeBDiagCursor,
-            self.RESIZE_LEFT: Qt.SizeHorCursor,
-            self.MOVE: Qt.OpenHandCursor,
-        }
-        return cursor_map.get(mode, Qt.ArrowCursor)
-    
-    def mousePressEvent(self, event):
-        """Bắt đầu drag/resize rectangle HOẶC OCR drag"""
-        if not self._pixmap or event.button() != Qt.LeftButton:
-            return
-        
-        # Nếu đang ở OCR mode, bắt đầu drag rectangle mới
-        if self._ocr_mode:
-            click_pos = event.pos()
-            pixmap_rect = self.pixmap().rect()
-            
-            offset_x = (self.width() - pixmap_rect.width()) // 2
-            offset_y = (self.height() - pixmap_rect.height()) // 2
-            
-            rel_x = click_pos.x() - offset_x
-            rel_y = click_pos.y() - offset_y
-            
-            if 0 <= rel_x <= pixmap_rect.width() and 0 <= rel_y <= pixmap_rect.height():
-                # Lưu vị trí bắt đầu drag (tọa độ scaled)
-                self._ocr_drag_start = (rel_x, rel_y)
-                self._ocr_drag_rect = None
-            return
-        
-        # Get click position relative to scaled pixmap
-        click_pos = event.pos()
-        pixmap_rect = self.pixmap().rect()
-        
-        # Center alignment offset
-        offset_x = (self.width() - pixmap_rect.width()) // 2
-        offset_y = (self.height() - pixmap_rect.height()) // 2
-        
-        rel_x = click_pos.x() - offset_x
-        rel_y = click_pos.y() - offset_y
-        
-        # Check if click is on pixmap
-        if rel_x < 0 or rel_y < 0 or rel_x > pixmap_rect.width() or rel_y > pixmap_rect.height():
-            return
-        
-        # Calculate scale
-        scale_x = self._pixmap.width() / pixmap_rect.width()
-        scale_y = self._pixmap.height() / pixmap_rect.height()
-        
-        # Convert to original coordinates
-        orig_x = int(rel_x * scale_x)
-        orig_y = int(rel_y * scale_y)
-        
-        # Find clicked rectangle và xác định resize mode
-        for rect in reversed(self._rectangles):
-            mode = self._get_resize_mode(orig_x, orig_y, rect)
-            
-            if mode != self.RESIZE_NONE:
-                self._active_rect_id = rect['id']
-                self._resize_mode = mode
-                self._drag_start_pos = (orig_x, orig_y)
-                self._rect_original_geometry = (rect['x'], rect['y'], rect['w'], rect['h'])
-                
-                # Set cursor
-                if mode == self.MOVE:
-                    self.setCursor(Qt.ClosedHandCursor)
-                else:
-                    self.setCursor(self._get_cursor_for_mode(mode))
-                
-                # Trigger repaint để hiển thị handles
-                self.updateDisplay()
-                break
-    
-    def mouseMoveEvent(self, event):
-        """Di chuyển/resize rectangle HOẶC vẽ OCR drag rectangle"""
-        if not self._pixmap:
-            return
-        
-        # Xử lý OCR drag mode
-        if self._ocr_mode and self._ocr_drag_start:
-            click_pos = event.pos()
-            pixmap_rect = self.pixmap().rect()
-            
-            offset_x = (self.width() - pixmap_rect.width()) // 2
-            offset_y = (self.height() - pixmap_rect.height()) // 2
-            
-            rel_x = click_pos.x() - offset_x
-            rel_y = click_pos.y() - offset_y
-            
-            # Clamp coordinates
-            rel_x = max(0, min(rel_x, pixmap_rect.width()))
-            rel_y = max(0, min(rel_y, pixmap_rect.height()))
-            
-            # Tạo rectangle từ start đến current
-            start_x, start_y = self._ocr_drag_start
-            
-            x = min(start_x, rel_x)
-            y = min(start_y, rel_y)
-            w = abs(rel_x - start_x)
-            h = abs(rel_y - start_y)
-            
-            self._ocr_drag_rect = (x, y, w, h)
-            self.updateDisplay()
-            return
-        
-        # Get position
-        click_pos = event.pos()
-        pixmap_rect = self.pixmap().rect()
-        
-        offset_x = (self.width() - pixmap_rect.width()) // 2
-        offset_y = (self.height() - pixmap_rect.height()) // 2
-        
-        rel_x = click_pos.x() - offset_x
-        rel_y = click_pos.y() - offset_y
-        
-        # Check bounds
-        if rel_x < 0 or rel_y < 0 or rel_x > pixmap_rect.width() or rel_y > pixmap_rect.height():
-            if self._resize_mode == self.RESIZE_NONE:
-                self.setCursor(Qt.ArrowCursor)
-            return
-        
-        # Calculate scale
-        scale_x = self._pixmap.width() / pixmap_rect.width()
-        scale_y = self._pixmap.height() / pixmap_rect.height()
-        
-        # Convert to original coordinates
-        orig_x = int(rel_x * scale_x)
-        orig_y = int(rel_y * scale_y)
-        
-        # If not dragging/resizing, update cursor
-        if self._resize_mode == self.RESIZE_NONE:
-            for rect in reversed(self._rectangles):
-                mode = self._get_resize_mode(orig_x, orig_y, rect)
-                if mode != self.RESIZE_NONE:
-                    self.setCursor(self._get_cursor_for_mode(mode))
-                    return
-            self.setCursor(Qt.ArrowCursor)
-            return
-        
-        # Apply drag/resize
-        for rect in self._rectangles:
-            if rect['id'] == self._active_rect_id:
-                dx = orig_x - self._drag_start_pos[0]
-                dy = orig_y - self._drag_start_pos[1]
-                
-                orig_x_rect, orig_y_rect, orig_w_rect, orig_h_rect = self._rect_original_geometry
-                
-                min_size = 10  # Kích thước tối thiểu
-                
-                if self._resize_mode == self.MOVE:
-                    # Move rectangle
-                    new_x = orig_x_rect + dx
-                    new_y = orig_y_rect + dy
-                    rect['x'] = max(0, min(new_x, self._pixmap.width() - rect['w']))
-                    rect['y'] = max(0, min(new_y, self._pixmap.height() - rect['h']))
-                    
-                elif self._resize_mode == self.RESIZE_TOP_LEFT:
-                    new_x = max(0, min(orig_x_rect + dx, orig_x_rect + orig_w_rect - min_size))
-                    new_y = max(0, min(orig_y_rect + dy, orig_y_rect + orig_h_rect - min_size))
-                    rect['x'] = new_x
-                    rect['y'] = new_y
-                    rect['w'] = orig_x_rect + orig_w_rect - new_x
-                    rect['h'] = orig_y_rect + orig_h_rect - new_y
-                    
-                elif self._resize_mode == self.RESIZE_TOP:
-                    new_y = max(0, min(orig_y_rect + dy, orig_y_rect + orig_h_rect - min_size))
-                    rect['y'] = new_y
-                    rect['h'] = orig_y_rect + orig_h_rect - new_y
-                    
-                elif self._resize_mode == self.RESIZE_TOP_RIGHT:
-                    new_y = max(0, min(orig_y_rect + dy, orig_y_rect + orig_h_rect - min_size))
-                    new_w = max(min_size, min(orig_w_rect + dx, self._pixmap.width() - orig_x_rect))
-                    rect['y'] = new_y
-                    rect['w'] = new_w
-                    rect['h'] = orig_y_rect + orig_h_rect - new_y
-                    
-                elif self._resize_mode == self.RESIZE_RIGHT:
-                    rect['w'] = max(min_size, min(orig_w_rect + dx, self._pixmap.width() - orig_x_rect))
-                    
-                elif self._resize_mode == self.RESIZE_BOTTOM_RIGHT:
-                    rect['w'] = max(min_size, min(orig_w_rect + dx, self._pixmap.width() - orig_x_rect))
-                    rect['h'] = max(min_size, min(orig_h_rect + dy, self._pixmap.height() - orig_y_rect))
-                    
-                elif self._resize_mode == self.RESIZE_BOTTOM:
-                    rect['h'] = max(min_size, min(orig_h_rect + dy, self._pixmap.height() - orig_y_rect))
-                    
-                elif self._resize_mode == self.RESIZE_BOTTOM_LEFT:
-                    new_x = max(0, min(orig_x_rect + dx, orig_x_rect + orig_w_rect - min_size))
-                    rect['x'] = new_x
-                    rect['w'] = orig_x_rect + orig_w_rect - new_x
-                    rect['h'] = max(min_size, min(orig_h_rect + dy, self._pixmap.height() - orig_y_rect))
-                    
-                elif self._resize_mode == self.RESIZE_LEFT:
-                    new_x = max(0, min(orig_x_rect + dx, orig_x_rect + orig_w_rect - min_size))
-                    rect['x'] = new_x
-                    rect['w'] = orig_x_rect + orig_w_rect - new_x
-                
-                break
-        
-        self.updateDisplay()
-    
-    def mouseReleaseEvent(self, event):
-        """Kết thúc drag/resize HOẶC OCR drag"""
-        if event.button() == Qt.LeftButton:
-            # Xử lý OCR drag mode
-            if self._ocr_mode and self._ocr_drag_start and self._ocr_drag_rect:
-                x, y, w, h = self._ocr_drag_rect
-                
-                # Chỉ xử lý nếu rectangle đủ lớn (tối thiểu 20x20 pixels)
-                if w >= 20 and h >= 20:
-                    # Convert scaled coordinates về original image coordinates
-                    if self._pixmap:
-                        pixmap_rect = self.pixmap().rect()
-                        scale_x = self._pixmap.width() / pixmap_rect.width()
-                        scale_y = self._pixmap.height() / pixmap_rect.height()
-                        
-                        orig_x = int(x * scale_x)
-                        orig_y = int(y * scale_y)
-                        orig_w = int(w * scale_x)
-                        orig_h = int(h * scale_y)
-                        
-                        # Emit signal để parent widget xử lý OCR
-                        from PySide6.QtCore import pyqtSignal
-                        if hasattr(self.parent(), 'on_ocr_region_selected'):
-                            self.parent().on_ocr_region_selected(orig_x, orig_y, orig_w, orig_h)
-                
-                # Reset OCR drag state
-                self._ocr_drag_start = None
-                self._ocr_drag_rect = None
-                self.updateDisplay()
-                return
-            
-            # Xử lý normal resize mode
-            if self._resize_mode != self.RESIZE_NONE:
-                self._resize_mode = self.RESIZE_NONE
-                self._drag_start_pos = None
-                self._rect_original_geometry = None
-                self.setCursor(Qt.ArrowCursor)
+        self.image_label.disable_ocr_mode()
 
 class ScaledLabel(QLabel):
     """Custom QLabel tự động scale pixmap theo width container"""
@@ -655,6 +191,7 @@ class CanvasPanel(QWidget):
     ocr_completed = Signal(int, list)
     panel_visibility_changed = Signal(bool, bool)
     ocr_region_selected = Signal(int, int, int, int, int)  # x, y, w, h, image_index
+    ocr_region_result_ready = Signal(str)  # THÊM: Signal trả kết quả OCR của vùng được chọn
     
     def __init__(self):
         super().__init__()
@@ -670,6 +207,7 @@ class CanvasPanel(QWidget):
         self.image_loader = ImageLoader()
         self.segmentation_processor: Optional[SegmentationProcessor] = None
         self.manga_pipeline_processor: Optional[MangaPipelineProcessor] = None
+        self.ocr_model = None  # THÊM: Cache OCR model để không load lại nhiều lần
         
         self.setup_ui()
         self.setup_connections()
@@ -1139,16 +677,85 @@ class CanvasPanel(QWidget):
         
     def on_ocr_region_selected(self, x: int, y: int, w: int, h: int):
         """Xử lý khi user chọn vùng OCR"""
-        if not self.image_paths or self.current_index >= len(self.image_paths):
-            return
+        self.logger.info(f"[OCR] ========== on_ocr_region_selected CALLED ==========")
+        self.logger.info(f"[OCR] Coordinates: x={x}, y={y}, w={w}, h={h}")
+        self.logger.info(f"[OCR] Current index: {self.current_index}")
+        self.logger.info(f"[OCR] Image paths count: {len(self.image_paths) if self.image_paths else 0}")
         
-        # Emit signal với image index hiện tại
-        self.ocr_region_selected.emit(x, y, w, h, self.current_index)
+        if not self.image_paths or self.current_index >= len(self.image_paths):
+            self.logger.error(f"[OCR] Cannot process - no images or invalid index")
+            return
         
         self.logger.info(f"[OCR] Region selected: x={x}, y={y}, w={w}, h={h} on image {self.current_index}")
         
+        # 1. Crop image theo coordinates
+        import cv2
+        current_image_path = self.image_paths[self.current_index]
+        image = cv2.imread(current_image_path)
+        
+        if image is None:
+            self.logger.error(f"[OCR] Failed to load image: {current_image_path}")
+            self.left_panel.disable_ocr_mode()
+            return
+        
+        # Convert BGR to RGB
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        
+        # Crop region
+        cropped = image_rgb[y:y+h, x:x+w]
+        
+        if cropped.size == 0:
+            self.logger.error(f"[OCR] Invalid crop region")
+            self.left_panel.disable_ocr_mode()
+            return
+        
+        # 2. Chạy OCR model
+        self.logger.info(f"[OCR] Running OCR on cropped region...")
+        ocr_text = self._run_ocr_on_region(cropped)
+        
+        self.logger.info(f"[OCR] OCR result: {ocr_text[:50]}...")
+        self.logger.info(f"[OCR] Emitting ocr_region_result_ready signal with text length: {len(ocr_text)}")
+        
+        # 3. Emit signal với kết quả OCR
+        self.ocr_region_result_ready.emit(ocr_text)
+        
+        self.logger.info(f"[OCR] Signal emitted successfully")
+        
         # Tắt OCR mode sau khi chọn xong
         self.left_panel.disable_ocr_mode()
+    
+    def _run_ocr_on_region(self, cropped_image_rgb: 'np.ndarray') -> str:
+        """
+        Chạy OCR trên vùng ảnh đã crop
+        
+        Args:
+            cropped_image_rgb: Ảnh RGB đã crop (numpy array)
+        
+        Returns:
+            str: Kết quả OCR
+        """
+        try:
+            # Load OCR model nếu chưa có (cache để tránh load lại nhiều lần)
+            if self.ocr_model is None:
+                self.logger.info("[OCR] Loading OCR model (first time)...")
+                from manga_ocr import MangaOcr
+                self.ocr_model = MangaOcr()
+                self.logger.info("[OCR] OCR model loaded successfully")
+            
+            # Convert numpy array to PIL Image
+            from PIL import Image
+            pil_image = Image.fromarray(cropped_image_rgb)
+            
+            # Run OCR
+            text = self.ocr_model(pil_image)
+            
+            return text
+            
+        except Exception as e:
+            self.logger.error(f"[OCR] Error running OCR: {e}")
+            import traceback
+            traceback.print_exc()
+            return "[OCR ERROR]"
     
     def enable_ocr_selection_mode(self):
         """Bật chế độ chọn vùng OCR"""

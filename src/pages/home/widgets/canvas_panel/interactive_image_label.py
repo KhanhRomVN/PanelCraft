@@ -10,6 +10,9 @@ from ...types.home_types import RectangleDict
 class InteractiveImageLabel(QLabel):
     """QLabel với khả năng drag-and-drop và resize rectangles"""
     
+    # THÊM: Signal để emit khi hoàn thành OCR region selection
+    ocr_region_selected = Signal(int, int, int, int)  # x, y, w, h
+    
     # Resize modes
     RESIZE_NONE = 0
     RESIZE_TOP_LEFT = 1
@@ -433,6 +436,8 @@ class InteractiveImageLabel(QLabel):
         """Hoàn thành OCR drag"""
         x, y, w, h = self._ocr_drag_rect
         
+        self.logger.info(f"[INTERACTIVE_LABEL] Finishing OCR drag: x={x}, y={y}, w={w}, h={h}")
+        
         if w >= 20 and h >= 20:
             if self._pixmap:
                 pixmap_rect = self.pixmap().rect()
@@ -444,8 +449,15 @@ class InteractiveImageLabel(QLabel):
                 orig_w = int(w * scale_x)
                 orig_h = int(h * scale_y)
                 
-                if hasattr(self.parent(), 'on_ocr_region_selected'):
-                    self.parent().on_ocr_region_selected(orig_x, orig_y, orig_w, orig_h)
+                self.logger.info(f"[INTERACTIVE_LABEL] Scaled coordinates: x={orig_x}, y={orig_y}, w={orig_w}, h={orig_h}")
+                self.logger.info(f"[INTERACTIVE_LABEL] Emitting ocr_region_selected signal")
+                
+                # Emit signal thay vì gọi parent method trực tiếp
+                self.ocr_region_selected.emit(orig_x, orig_y, orig_w, orig_h)
+                
+                self.logger.info(f"[INTERACTIVE_LABEL] Signal emitted successfully")
+        else:
+            self.logger.warning(f"[INTERACTIVE_LABEL] OCR drag too small: w={w}, h={h}")
         
         self._ocr_drag_start = None
         self._ocr_drag_rect = None

@@ -9,6 +9,7 @@ from widget.common.custom_input import CustomInput
 from ...models.ocr_result import OCRResult
 from ...constants.constants import OCR_DISPLAY_MAX_LENGTH
 from ...types.home_types import OCRTableData
+from .ocr_results_table import OCRResultsTable
 
 
 class ControlPanel(QWidget):
@@ -28,7 +29,27 @@ class ControlPanel(QWidget):
     
     def setup_ui(self):
         """Setup UI với phần hiển thị OCR results"""
-        layout = QVBoxLayout(self)
+        # Tạo main layout chứa scroll area
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        
+        # Tạo scroll area
+        from PySide6.QtWidgets import QScrollArea
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+        """)
+        
+        # Tạo container widget cho nội dung
+        content_widget = QWidget()
+        layout = QVBoxLayout(content_widget)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(16)
         
@@ -89,123 +110,11 @@ class ControlPanel(QWidget):
         
         layout.addWidget(model_group)
         
-        # OCR Results group
-        ocr_group = QGroupBox("OCR Results & Translation")
-        ocr_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 1px solid var(--border);
-                border-radius: 8px;
-                margin-top: 12px;
-                padding-top: 16px;
-                background-color: var(--card-background);
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 8px;
-                color: var(--text-primary);
-            }
-        """)
-        
-        ocr_layout = QVBoxLayout(ocr_group)
-        ocr_layout.setSpacing(8)
-        
-        # Current image info & Character management
-        header_layout = QHBoxLayout()
-        
-        self.current_image_label = QLabel("No image selected")
-        self.current_image_label.setStyleSheet("""
-            color: var(--text-secondary);
-            font-size: 12px;
-            font-weight: normal;
-            padding: 4px;
-        """)
-        header_layout.addWidget(self.current_image_label)
-        
-        header_layout.addStretch()
-        
-        # OCR Region Selection button
-        self.ocr_select_btn = CustomButton(
-            text="🔍 Select OCR Region",
-            variant="secondary",
-            size="sm"
-        )
-        self.ocr_select_btn.setCheckable(True)
-        self.ocr_select_btn.clicked.connect(self.on_toggle_ocr_mode)
-        header_layout.addWidget(self.ocr_select_btn)
-        
-        # Manage Characters button
-        self.manage_characters_btn = CustomButton(
-            text="Manage Characters",
-            variant="secondary",
-            size="sm"
-        )
-        self.manage_characters_btn.clicked.connect(self.on_manage_characters)
-        header_layout.addWidget(self.manage_characters_btn)
-        
-        ocr_layout.addLayout(header_layout)
-        
-        # OCR results table - Dùng CustomTable
-        self.ocr_table = CustomTable(
-            headers=["STT", "Character", "Original Text", "Translation"],
-            page_size=15,
-            show_pagination=False
-        )
-        
-        # Style cho table (CustomTable tự xử lý phần lớn)
-        ocr_layout.addWidget(self.ocr_table)
-        
-        # Separator line
-        separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
-        separator.setStyleSheet("background-color: var(--border);")
-        ocr_layout.addWidget(separator)
-        
-        # Edit section - Hiển thị khi click vào row
-        self.edit_container = QWidget()
-        self.edit_container.hide()
-        edit_layout = QVBoxLayout(self.edit_container)
-        edit_layout.setContentsMargins(0, 8, 0, 0)
-        edit_layout.setSpacing(12)
-        
-        # Original text input
-        self.original_input = CustomInput(
-            label="Original Text",
-            placeholder="Original text from OCR...",
-            variant="filled",
-            multiline=True,
-            rows=3
-        )
-        self.original_input.input_field.setReadOnly(False)
-        edit_layout.addWidget(self.original_input)
-        
-        # Translation input
-        self.translation_input = CustomInput(
-            label="Translation",
-            placeholder="Enter translation here...",
-            variant="filled",
-            multiline=True,
-            rows=3
-        )
-        edit_layout.addWidget(self.translation_input)
-        
-        # Save button
-        save_btn_layout = QHBoxLayout()
-        save_btn_layout.addStretch()
-        self.save_edit_btn = CustomButton(
-            text="Save Changes",
-            variant="primary",
-            size="sm"
-        )
-        self.save_edit_btn.clicked.connect(self.on_save_edit)
-        save_btn_layout.addWidget(self.save_edit_btn)
-        edit_layout.addLayout(save_btn_layout)
-        
-        ocr_layout.addWidget(self.edit_container)
-        
-        layout.addWidget(ocr_group)
+        # OCR Results Table
+        self.ocr_results_table = OCRResultsTable()
+        self.ocr_results_table.ocr_mode_toggled.connect(self.on_ocr_mode_toggled)
+        self.ocr_results_table.manage_characters_requested.connect(self.on_manage_characters)
+        layout.addWidget(self.ocr_results_table)
         
         # Status group
         status_group = QGroupBox("Status")
@@ -243,6 +152,18 @@ class ControlPanel(QWidget):
                 
         # Spacer
         layout.addStretch()
+        
+        # Set content widget vào scroll area
+        scroll_area.setWidget(content_widget)
+        
+        # Add scroll area vào main layout
+        main_layout.addWidget(scroll_area)
+        
+        # Set content widget vào scroll area
+        scroll_area.setWidget(content_widget)
+        
+        # Add scroll area vào main layout
+        main_layout.addWidget(scroll_area)
     
     def on_run_clicked(self):
         """Handle run button click"""
@@ -253,7 +174,7 @@ class ControlPanel(QWidget):
         self.run_button.setEnabled(False)
         self.progress_label.setText("Initializing pipeline...")
         self.progress_label.show()
-        self.ocr_table.setData([])  # Clear table
+        self.ocr_results_table.clear_table()  # Clear table
     
     def on_folder_loaded(self, folder_path: str):
         """Handle folder loaded"""
@@ -263,114 +184,19 @@ class ControlPanel(QWidget):
         # Update status
         folder_name = folder_path.split('/')[-1] or folder_path
         self.status_label.setText(f"Folder loaded: {folder_name}")
+        
+    def on_ocr_mode_toggled(self, enabled: bool):
+        """Toggle OCR mode - forward to parent"""
+        self.ocr_mode_toggled.emit(enabled)
     
     def on_ocr_result(self, index: int, texts: list):
-        """Handle OCR results"""
-        
-        # Store result
-        self.ocr_results[index] = texts
-        
-        # Update OCR display if this is the current image
-        if index == self.current_image_index:
-            self.update_ocr_display(texts)
+        # Forward to OCR results table
+        self.ocr_results_table.on_ocr_result(index, texts)
             
     def on_image_changed(self, index: int):
         """Handle image navigation"""
-        
-        self.current_image_index = index
-        self.update_current_image_label(index)
-                
-        # Update OCR display for current image
-        if index in self.ocr_results:
-            self.update_ocr_display(self.ocr_results[index])
-        else:
-            self.logger.warning(f"[CONTROL] No OCR results for index {index} yet")
-            self.ocr_table.setData([])
-            
-    def update_current_image_label(self, index: int):
-        """Update current image label"""
-        self.current_image_label.setText(f"Current Image: {index + 1}")
-    
-    def update_ocr_display(self, texts: list):
-        """Update OCR table display với CustomTable"""
-        from core.project_manager import ProjectManager
-        
-        if not texts or not any(text.strip() for text in texts):
-            self.ocr_table.setData([])
-            self.logger.warning(f"[CONTROL] No valid text to display")
-            return
-        
-        project_manager = ProjectManager()
-        characters = project_manager.get_characters()
-        
-        # Prepare data for CustomTable
-        valid_texts = [text for text in texts if text.strip()]
-        table_data = []
-        
-        self.logger.info(f"[OCR TABLE] Displaying {len(valid_texts)} texts in manga reading order")
-        
-        for i, text in enumerate(valid_texts):
-            # Truncate text nếu quá dài
-            original_short = text if len(text) <= OCR_DISPLAY_MAX_LENGTH else text[:OCR_DISPLAY_MAX_LENGTH - 3] + "..."
-            
-            table_data.append({
-                "STT": str(i + 1),
-                "Character": "-- Select --",
-                "Original Text": original_short,
-                "Translation": "",
-                "_full_original": text,  # Lưu full text để edit
-                "_full_translation": "",
-                "_character_id": None
-            })
-        
-        self.ocr_table.setData(table_data)
-        
-        # Lưu data gốc để edit
-        self.ocr_data = table_data
-        
-    def on_row_clicked(self, row_index: int, row_data: dict):
-        """Handle khi click vào row trong table"""
-        
-        # Hiển thị edit container
-        self.edit_container.show()
-        
-        # Load data vào inputs
-        self.original_input.setText(row_data.get("_full_original", ""))
-        self.translation_input.setText(row_data.get("_full_translation", ""))
-        
-        # Lưu row index đang edit
-        self.current_edit_row = row_index
-        
-        self.logger.info(f"[CONTROL] Editing row {row_index}")
-    
-    def on_save_edit(self):
-        """Lưu thay đổi từ edit inputs vào table data"""
-        if not hasattr(self, 'current_edit_row'):
-            return
-        
-        row = self.current_edit_row
-        
-        # Lấy text từ inputs
-        full_original = self.original_input.text()
-        full_translation = self.translation_input.text()
-        
-        # Cập nhật data
-        if row < len(self.ocr_data):
-            self.ocr_data[row]["_full_original"] = full_original
-            self.ocr_data[row]["_full_translation"] = full_translation
-            
-            # Cập nhật display (truncated)
-            max_len = OCR_DISPLAY_MAX_LENGTH
-            original_short = full_original if len(full_original) <= max_len else full_original[:max_len - 3] + "..."
-            translation_short = full_translation if len(full_translation) <= max_len else full_translation[:max_len - 3] + "..."
-            
-            self.ocr_data[row]["Original Text"] = original_short
-            self.ocr_data[row]["Translation"] = translation_short
-            
-            # Refresh table
-            self.ocr_table.setData(self.ocr_data)
-            
-            self.logger.info(f"[CONTROL] Saved changes for row {row}")
+        # Forward to OCR results table
+        self.ocr_results_table.on_image_changed(index)
     
     def on_processing_complete(self):
         """Handle processing complete"""
@@ -386,6 +212,18 @@ class ControlPanel(QWidget):
         if dialog.exec():
             # Cập nhật lại ComboBox trong table sau khi thay đổi characters
             self.refresh_character_comboboxes()
+            
+    def on_ocr_region_result(self, text: str):
+        """
+        Nhận kết quả OCR từ region selection và update vào row đang focus
+        
+        Args:
+            text: Kết quả OCR
+        """
+        self.logger.info(f"[CONTROL] Received OCR region result: {text[:50]}...")
+        
+        # Forward đến OCR results table
+        self.ocr_results_table.on_ocr_region_result(text)
     
     def on_toggle_ocr_mode(self, checked: bool):
         """Toggle OCR selection mode"""
@@ -425,31 +263,3 @@ class ControlPanel(QWidget):
                     background-color: var(--button-second-bg-hover);
                 }
             """)
-    
-    def on_character_changed(self, row: int, combo_index: int):
-        """Handle khi user thay đổi character cho một dòng"""
-        combo = self.ocr_table.cellWidget(row, 1)
-        if combo:
-            char_id = combo.currentData()
-            char_name = combo.currentText()
-            
-            if char_id:
-                self.logger.info(f"Row {row}: Character changed to {char_name} (ID: {char_id})")
-            else:
-                self.logger.info(f"Row {row}: No character selected")
-    
-    def get_ocr_table_data(self) -> list:
-        """Lấy dữ liệu từ table để lưu vào project"""
-        if not hasattr(self, 'ocr_data'):
-            return []
-        
-        data = []
-        for i, row in enumerate(self.ocr_data):
-            data.append({
-                'index': i,
-                'character_id': row.get('_character_id'),
-                'original_text': row.get('_full_original', ''),
-                'translated_text': row.get('_full_translation', '')
-            })
-        
-        return data
