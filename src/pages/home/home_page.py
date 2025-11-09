@@ -5,6 +5,7 @@ import logging
 
 from .widgets.canvas_panel.canvas_panel import CanvasPanel
 from .widgets.control_panel.control_panel import ControlPanel
+from .constants.constants import MIN_CONTROL_PANEL_WIDTH, CANVAS_PANEL_DEFAULT_RATIO, CONTROL_PANEL_DEFAULT_RATIO
 
 
 class HomePage(QWidget):
@@ -49,10 +50,13 @@ class HomePage(QWidget):
         
         # Set initial sizes: 60% canvas, 40% control
         total_width = 1000  # giá trị tham chiếu
-        self.main_splitter.setSizes([int(total_width * 0.6), int(total_width * 0.4)])
+        self.main_splitter.setSizes([
+            int(total_width * CANVAS_PANEL_DEFAULT_RATIO), 
+            int(total_width * CONTROL_PANEL_DEFAULT_RATIO)
+        ])
         
         # Set minimum width cho control panel
-        self.control_panel.setMinimumWidth(300)
+        self.control_panel.setMinimumWidth(MIN_CONTROL_PANEL_WIDTH)
         
         main_layout.addWidget(self.main_splitter)
     
@@ -114,8 +118,8 @@ class HomePage(QWidget):
             new_control_width = int(total_width * 0.60)  # 60%
         else:
             # Cả 2 panels đều hiện -> Tỷ lệ ban đầu
-            new_canvas_width = int(total_width * 0.6)  # 60%
-            new_control_width = int(total_width * 0.4)  # 40%
+            new_canvas_width = int(total_width * CANVAS_PANEL_DEFAULT_RATIO)
+            new_control_width = int(total_width * CONTROL_PANEL_DEFAULT_RATIO)
         
         self.main_splitter.setSizes([new_canvas_width, new_control_width])
         

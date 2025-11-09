@@ -2,6 +2,8 @@ from PySide6.QtCore import QObject, Signal, QThread
 from typing import List
 import logging
 import os
+from ..utils.image_utils import validate_image_file
+from ..constants.constants import VALID_IMAGE_EXTENSIONS
 
 
 class ImageLoaderThread(QThread):
@@ -24,13 +26,11 @@ class ImageLoaderThread(QThread):
                 if os.path.exists(path) and os.path.isfile(path):
                     # Basic validation - check if file is readable
                     try:
-                        with open(path, 'rb') as f:
-                            # Read first few bytes to verify it's an image
-                            header = f.read(8)
-                            if self.is_valid_image_header(header):
-                                valid_paths.append(path)
-                            else:
-                                self.logger.warning(f"Invalid image header: {path}")
+                        from ..utils.image_utils import validate_image_file
+                        if validate_image_file(path):
+                            valid_paths.append(path)
+                        else:
+                            self.logger.warning(f"Invalid image header: {path}")
                     except Exception as e:
                         self.logger.error(f"Error reading file {path}: {e}")
                 else:
@@ -44,17 +44,6 @@ class ImageLoaderThread(QThread):
         except Exception as e:
             self.logger.error(f"Error in image loading thread: {e}")
             self.error_occurred.emit(str(e))
-    
-    def is_valid_image_header(self, header: bytes) -> bool:
-        """Check if file header indicates a valid image format"""
-        # JPEG
-        if header[:2] == b'\xff\xd8':
-            return True
-        # PNG
-        if header[:8] == b'\x89PNG\r\n\x1a\n':
-            return True
-        return False
-
 
 class ImageLoader(QObject):
     """Service để load và quản lý images"""

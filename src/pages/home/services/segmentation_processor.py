@@ -7,6 +7,20 @@ import numpy as np
 import onnxruntime as ort
 import cv2
 from core.model_manager import ModelManager
+from ..utils.image_utils import numpy_to_qimage
+from ..utils.geometry_utils import (
+    find_largest_inscribed_rectangle,
+    apply_nms,
+    is_rectangle_inside_mask
+)
+from ..constants.constants import (
+    SEGMENTATION_INPUT_SIZE,
+    SEGMENTATION_CONF_THRESHOLD,
+    SEGMENTATION_IOU_THRESHOLD,
+    SEGMENTATION_MASK_THRESHOLD,
+    PADDING_VALUE,
+    MIN_RECTANGLE_SIZE
+)
 
 
 class SegmentationThread(QThread):
@@ -263,17 +277,8 @@ class SegmentationThread(QThread):
         Returns:
             list: Indices của boxes được giữ lại
         """
-        if len(boxes) == 0:
-            return []
-        
-        # Convert from center format to corner format
-        x_center, y_center, width, height = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
-        x1 = x_center - width / 2
-        y1 = y_center - height / 2
-        x2 = x_center + width / 2
-        y2 = y_center + height / 2
-        
-        boxes_corner = np.stack([x1, y1, x2, y2], axis=1)
+        from ..utils.geometry_utils import apply_nms as geometry_apply_nms
+        return geometry_apply_nms(boxes, scores, iou_threshold)
         
         # Sort by scores (descending)
         order = scores.argsort()[::-1]
@@ -312,19 +317,15 @@ class SegmentationThread(QThread):
     def _find_largest_inscribed_rectangle(self, mask: np.ndarray) -> tuple:
         """
         Tìm hình chữ nhật nội tiếp có diện tích lớn nhất trong mask
-        Sử dụng Distance Transform + Dynamic Programming
         
         Args:
-            mask: Binary mask (np.uint8) - 1 cho vùng object, 0 cho background
+            mask: Binary mask (np.uint8)
         
         Returns:
             tuple: (x, y, width, height) hoặc None nếu không tìm thấy
         """
-        if mask.sum() == 0:
-            return None
-        
-        # Tính Distance Transform
-        dist_transform = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
+        from ..utils.geometry_utils import find_largest_inscribed_rectangle as geometry_find_rect
+        return geometry_find_rect(mask)
         
         # Tìm bounding box của contour để giới hạn vùng tìm kiếm
         coords = np.column_stack(np.where(mask > 0))
@@ -443,17 +444,8 @@ class SegmentationThread(QThread):
     
     def numpy_to_qimage(self, image: np.ndarray) -> QImage:
         """Convert numpy array to QImage"""
-        height, width = image.shape[:2]
-        
-        if len(image.shape) == 2:
-            # Grayscale
-            qimage = QImage(image.data, width, height, width, QImage.Format_Grayscale8)
-        else:
-            # RGB
-            bytes_per_line = 3 * width
-            qimage = QImage(image.data, width, height, bytes_per_line, QImage.Format_RGB888)
-        
-        return qimage.copy()
+        from ..utils.image_utils import numpy_to_qimage as utils_numpy_to_qimage
+        return utils_numpy_to_qimage(image)
 
 
 # ========== TEXT DETECTION PROCESSOR ==========

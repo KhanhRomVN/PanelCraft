@@ -3,6 +3,8 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap, QPainter, QPen, QBrush, QFont, QFontMetrics
 from typing import List, Optional
 import logging
+from ...constants.constants import RESIZE_HANDLE_SIZE, MIN_RECTANGLE_SIZE
+from ...types.home_types import RectangleDict
 
 
 class InteractiveImageLabel(QLabel):
@@ -28,7 +30,7 @@ class InteractiveImageLabel(QLabel):
         self._resize_mode: int = self.RESIZE_NONE
         self._drag_start_pos = None
         self._rect_original_geometry = None
-        self._handle_size = 8
+        self._handle_size = RESIZE_HANDLE_SIZE
         
         self._ocr_mode: bool = False
         self._ocr_drag_start = None
@@ -350,7 +352,7 @@ class InteractiveImageLabel(QLabel):
             dy = orig_y - self._drag_start_pos[1]
             
             orig_x_rect, orig_y_rect, orig_w_rect, orig_h_rect = self._rect_original_geometry
-            min_size = 10
+            min_size = MIN_RECTANGLE_SIZE
             
             if self._resize_mode == self.MOVE:
                 self._handle_move(rect, dx, dy, orig_x_rect, orig_y_rect)

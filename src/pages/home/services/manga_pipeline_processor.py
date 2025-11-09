@@ -7,6 +7,28 @@ import numpy as np
 import cv2
 import onnxruntime as ort
 from core.model_manager import ModelManager
+from ..models.segment_data import SegmentData, RectangleData
+from ..utils.image_utils import numpy_to_qimage
+from ..utils.geometry_utils import (
+    find_largest_inscribed_rectangle,
+    apply_nms,
+    sort_segments_manga_order
+)
+from ..constants.constants import (
+    SEGMENTATION_INPUT_SIZE,
+    SEGMENTATION_CONF_THRESHOLD,
+    SEGMENTATION_IOU_THRESHOLD,
+    TEXT_DETECTION_INPUT_SIZE,
+    TEXT_DETECTION_CONF_THRESHOLD,
+    TEXT_DETECTION_NMS_THRESHOLD,
+    TEXT_DETECTION_MASK_THRESHOLD,
+    INPAINT_RADIUS,
+    LETTERBOX_STRIDE,
+    OCR_MODEL_FILES,
+    PADDING_VALUE
+)
+
+from ..types.home_types import RectangleDict, SegmentDict
 
 
 class MangaPipelineThread(QThread):
@@ -34,15 +56,15 @@ class MangaPipelineThread(QThread):
         self.ocr_tokenizer = None
         
         # Segmentation config
-        self.seg_input_size = 640
-        self.seg_conf_thresh = 0.5
-        self.seg_iou_thresh = 0.45
+        self.seg_input_size = SEGMENTATION_INPUT_SIZE
+        self.seg_conf_thresh = SEGMENTATION_CONF_THRESHOLD
+        self.seg_iou_thresh = SEGMENTATION_IOU_THRESHOLD
         
         # Text detection config
-        self.text_input_size = 1024
-        self.text_conf_thresh = 0.4
-        self.text_nms_thresh = 0.35
-        self.text_mask_thresh = 0.3
+        self.text_input_size = TEXT_DETECTION_INPUT_SIZE
+        self.text_conf_thresh = TEXT_DETECTION_CONF_THRESHOLD
+        self.text_nms_thresh = TEXT_DETECTION_NMS_THRESHOLD
+        self.text_mask_thresh = TEXT_DETECTION_MASK_THRESHOLD
     
     def run(self):
         """Chạy full pipeline cho tất cả ảnh"""
@@ -70,11 +92,9 @@ class MangaPipelineThread(QThread):
                     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "fugashi", "unidic-lite"])
                 
                 # Validate OCR model files
-                required_files = ['config.json', 'preprocessor_config.json', 'pytorch_model.bin', 
-                                 'special_tokens_map.json', 'tokenizer_config.json', 'vocab.txt']
                 missing_files = []
                 
-                for file in required_files:
+                for file in OCR_MODEL_FILES:
                     file_path = os.path.join(self.ocr_model_path, file)
                     if not os.path.exists(file_path):
                         missing_files.append(file)
@@ -276,13 +296,8 @@ class MangaPipelineThread(QThread):
         Returns:
             List[Dict]: Segments đã được sắp xếp và cập nhật lại id
         """
-        if not segments:
-            return segments
-        
-        # Tính trung điểm của mỗi segment
-        def get_center(seg):
-            x1, y1, x2, y2 = seg['box']
-            return ((x1 + x2) / 2, (y1 + y2) / 2)
+        from ..utils.geometry_utils import sort_segments_manga_order as geometry_sort_segments
+        return geometry_sort_segments(segments)
         
         # Sắp xếp theo:
         # 1. Y tăng dần (trên xuống dưới)
@@ -383,7 +398,7 @@ class MangaPipelineThread(QThread):
         resized = cv2.resize(image, (new_w, new_h))
         
         # Letterbox with padding
-        canvas = np.full((input_size, input_size, 3), 114, dtype=np.uint8)
+        canvas = np.full((input_size, input_size, 3), PADDING_VALUE, dtype=np.uint8)
         pad_w = (input_size - new_w) // 2
         pad_h = (input_size - new_h) // 2
         canvas[pad_h:pad_h+new_h, pad_w:pad_w+new_w] = resized
@@ -501,46 +516,8 @@ class MangaPipelineThread(QThread):
     
     def apply_nms_segmentation(self, boxes, scores, iou_threshold):
         """NMS for segmentation"""
-        if len(boxes) == 0:
-            return []
-        
-        x_center, y_center, width, height = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
-        x1 = x_center - width / 2
-        y1 = y_center - height / 2
-        x2 = x_center + width / 2
-        y2 = y_center + height / 2
-        
-        boxes_corner = np.stack([x1, y1, x2, y2], axis=1)
-        order = scores.argsort()[::-1]
-        
-        keep = []
-        while len(order) > 0:
-            i = order[0]
-            keep.append(i)
-            
-            if len(order) == 1:
-                break
-            
-            xx1 = np.maximum(boxes_corner[i, 0], boxes_corner[order[1:], 0])
-            yy1 = np.maximum(boxes_corner[i, 1], boxes_corner[order[1:], 1])
-            xx2 = np.minimum(boxes_corner[i, 2], boxes_corner[order[1:], 2])
-            yy2 = np.minimum(boxes_corner[i, 3], boxes_corner[order[1:], 3])
-            
-            w = np.maximum(0.0, xx2 - xx1)
-            h = np.maximum(0.0, yy2 - yy1)
-            intersection = w * h
-            
-            area_i = (boxes_corner[i, 2] - boxes_corner[i, 0]) * (boxes_corner[i, 3] - boxes_corner[i, 1])
-            area_order = (boxes_corner[order[1:], 2] - boxes_corner[order[1:], 0]) * \
-                         (boxes_corner[order[1:], 3] - boxes_corner[order[1:], 1])
-            
-            union = area_i + area_order - intersection
-            iou = intersection / (union + 1e-6)
-            
-            inds = np.where(iou <= iou_threshold)[0]
-            order = order[inds + 1]
-        
-        return keep
+        from ..utils.geometry_utils import apply_nms as geometry_apply_nms
+        return geometry_apply_nms(boxes, scores, iou_threshold)
     
     # ========== CANVAS CREATION ==========
     
@@ -604,8 +581,10 @@ class MangaPipelineThread(QThread):
         
         return cleaned_rgb, mask
     
-    def letterbox(self, img, new_shape=(1024, 1024), color=(0, 0, 0), stride=64):
+    def letterbox(self, img, new_shape=(1024, 1024), color=None, stride=LETTERBOX_STRIDE):
         """Letterbox resize for text detection"""
+        if color is None:
+            color = (0, 0, 0)
         shape = img.shape[:2]
         if isinstance(new_shape, int):
             new_shape = (new_shape, new_shape)
@@ -770,10 +749,8 @@ class MangaPipelineThread(QThread):
     
     def numpy_to_qimage(self, image: np.ndarray) -> QImage:
         """Convert numpy array to QImage"""
-        height, width = image.shape[:2]
-        bytes_per_line = 3 * width
-        qimage = QImage(image.data, width, height, bytes_per_line, QImage.Format_RGB888)
-        return qimage.copy()
+        from ..utils.image_utils import numpy_to_qimage as utils_numpy_to_qimage
+        return utils_numpy_to_qimage(image)
     
     def _find_largest_inscribed_rectangle(self, mask: np.ndarray) -> tuple:
         """
@@ -785,49 +762,8 @@ class MangaPipelineThread(QThread):
         Returns:
             tuple: (x, y, width, height) hoặc None nếu không tìm thấy
         """
-        if mask.sum() == 0:
-            return None
-        
-        coords = np.column_stack(np.where(mask > 0))
-        if len(coords) == 0:
-            return None
-        
-        y_min, x_min = coords.min(axis=0)
-        y_max, x_max = coords.max(axis=0)
-        
-        mask_crop = mask[y_min:y_max+1, x_min:x_max+1]
-        
-        h, w = mask_crop.shape
-        
-        max_area = 0
-        best_rect = None
-        
-        height_map = np.zeros((h, w), dtype=np.int32)
-        
-        for i in range(h):
-            for j in range(w):
-                if mask_crop[i, j] > 0:
-                    if i == 0:
-                        height_map[i, j] = 1
-                    else:
-                        height_map[i, j] = height_map[i-1, j] + 1
-                else:
-                    height_map[i, j] = 0
-        
-        for i in range(h):
-            histogram = height_map[i, :]
-            rect = self._largest_rectangle_in_histogram(histogram, i)
-            
-            if rect is not None:
-                x, y, rw, rh = rect
-                area = rw * rh
-                
-                if self._is_rectangle_inside_mask(mask_crop, x, y, rw, rh):
-                    if area > max_area:
-                        max_area = area
-                        best_rect = (x + x_min, y + y_min, rw, rh)
-        
-        return best_rect
+        from ..utils.geometry_utils import find_largest_inscribed_rectangle as geometry_find_rect
+        return geometry_find_rect(mask)
     
     def _largest_rectangle_in_histogram(self, histogram: np.ndarray, row_index: int) -> tuple:
         """Tìm hình chữ nhật lớn nhất trong histogram"""
@@ -957,17 +893,9 @@ class MangaPipelineProcessor(QObject):
         ocr_path = base_path
         
         # Kiểm tra TẤT CẢ các file cần thiết
-        required_files = [
-            'config.json', 
-            'preprocessor_config.json',
-            'pytorch_model.bin', 
-            'special_tokens_map.json',
-            'tokenizer_config.json',
-            'vocab.txt'
-        ]
         missing_files = []
-                
-        for file in required_files:
+        
+        for file in OCR_MODEL_FILES:
             file_path = os.path.join(ocr_path, file)
             if not os.path.exists(file_path):
                 missing_files.append(file)

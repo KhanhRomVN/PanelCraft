@@ -6,6 +6,9 @@ import logging
 from widget.common.custom_button import CustomButton
 from widget.common.custom_table import CustomTable
 from widget.common.custom_input import CustomInput
+from ...models.ocr_result import OCRResult
+from ...constants.constants import OCR_DISPLAY_MAX_LENGTH
+from ...types.home_types import OCRTableData
 
 
 class ControlPanel(QWidget):
@@ -250,7 +253,7 @@ class ControlPanel(QWidget):
         self.run_button.setEnabled(False)
         self.progress_label.setText("Initializing pipeline...")
         self.progress_label.show()
-        self.ocr_table.setRowCount(0)  # Clear table
+        self.ocr_table.setData([])  # Clear table
     
     def on_folder_loaded(self, folder_path: str):
         """Handle folder loaded"""
@@ -282,7 +285,7 @@ class ControlPanel(QWidget):
             self.update_ocr_display(self.ocr_results[index])
         else:
             self.logger.warning(f"[CONTROL] No OCR results for index {index} yet")
-            self.ocr_table.setRowCount(0)
+            self.ocr_table.setData([])
             
     def update_current_image_label(self, index: int):
         """Update current image label"""
@@ -308,7 +311,7 @@ class ControlPanel(QWidget):
         
         for i, text in enumerate(valid_texts):
             # Truncate text nếu quá dài
-            original_short = text if len(text) <= 50 else text[:47] + "..."
+            original_short = text if len(text) <= OCR_DISPLAY_MAX_LENGTH else text[:OCR_DISPLAY_MAX_LENGTH - 3] + "..."
             
             table_data.append({
                 "STT": str(i + 1),
@@ -357,8 +360,9 @@ class ControlPanel(QWidget):
             self.ocr_data[row]["_full_translation"] = full_translation
             
             # Cập nhật display (truncated)
-            original_short = full_original if len(full_original) <= 50 else full_original[:47] + "..."
-            translation_short = full_translation if len(full_translation) <= 50 else full_translation[:47] + "..."
+            max_len = OCR_DISPLAY_MAX_LENGTH
+            original_short = full_original if len(full_original) <= max_len else full_original[:max_len - 3] + "..."
+            translation_short = full_translation if len(full_translation) <= max_len else full_translation[:max_len - 3] + "..."
             
             self.ocr_data[row]["Original Text"] = original_short
             self.ocr_data[row]["Translation"] = translation_short
