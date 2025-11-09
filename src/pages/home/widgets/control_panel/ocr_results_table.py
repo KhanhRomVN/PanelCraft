@@ -26,6 +26,11 @@ class OCRResultsTable(QWidget):
         self.ocr_data = []  # Current table data
         self.current_edit_row = None
         self.current_detail_row = None  # THÊM: Track row hiện tại trong detail view
+        
+        # THÊM: Flags để ngăn recursion
+        self._processing_click = False
+        self._toggling_ocr_mode = False
+        
         self.setup_ui()
         self.setup_table_connections()  # THÊM: Setup connections sau khi UI ready
     
@@ -73,7 +78,7 @@ class OCRResultsTable(QWidget):
         
         # OCR Region Selection button
         self.ocr_select_btn = CustomButton(
-            text="🔍 Select OCR Region",
+            text="🔍 Enable OCR Region Selection",
             variant="secondary",
             size="sm"
         )
@@ -208,93 +213,6 @@ class OCRResultsTable(QWidget):
         )
         detail_layout.addWidget(self.detail_character_combo)
         
-        # Original text field (read-only, multiline)
-        self.detail_original_input = CustomInput(
-            label="Văn bản gốc",
-            variant="filled",
-            multiline=True,
-            rows=4
-        )
-        self.detail_original_input.input_field.setReadOnly(True)
-        detail_layout.addWidget(self.detail_original_input)
-        
-        # Translation field (editable, multiline)
-        self.detail_translation_input = CustomInput(
-            label="Bản dịch",
-            placeholder="Nhập bản dịch tại đây...",
-            variant="filled",
-            multiline=True,
-            rows=4
-        )
-        detail_layout.addWidget(self.detail_translation_input)
-        
-        # Action buttons
-        detail_btn_layout = QHBoxLayout()
-        detail_btn_layout.addStretch()
-        
-        self.detail_close_btn = CustomButton(
-            text="Đóng",
-            variant="secondary",
-            size="sm"
-        )
-        self.detail_close_btn.clicked.connect(self.on_close_detail)
-        detail_btn_layout.addWidget(self.detail_close_btn)
-        
-        self.detail_save_btn = CustomButton(
-            text="Lưu thay đổi",
-            variant="primary",
-            size="sm"
-        )
-        self.detail_save_btn.clicked.connect(self.on_save_detail)
-        detail_btn_layout.addWidget(self.detail_save_btn)
-        
-        detail_layout.addLayout(detail_btn_layout)
-        
-        ocr_layout.addWidget(self.detail_container)
-        
-        layout.addWidget(ocr_group)
-        detail_separator.setFrameShape(QFrame.HLine)
-        detail_separator.setFrameShadow(QFrame.Sunken)
-        detail_separator.setStyleSheet("background-color: var(--border);")
-        ocr_layout.addWidget(detail_separator)
-        
-        # Detail container
-        self.detail_container = QWidget()
-        self.detail_container.hide()
-        detail_layout = QVBoxLayout(self.detail_container)
-        detail_layout.setContentsMargins(0, 8, 0, 0)
-        detail_layout.setSpacing(12)
-        
-        # Title
-        detail_title = QLabel("Chi tiết OCR")
-        detail_title.setStyleSheet("""
-            font-size: 14px;
-            font-weight: bold;
-            color: var(--text-primary);
-            padding: 8px 0;
-        """)
-        detail_layout.addWidget(detail_title)
-        
-        # STT field (read-only)
-        self.detail_stt_input = CustomInput(
-            label="STT",
-            variant="filled",
-            size="sm"
-        )
-        self.detail_stt_input.input_field.setReadOnly(True)
-        detail_layout.addWidget(self.detail_stt_input)
-        
-        # Character field (CustomCombobox)
-        from widget.common.custom_combobox import CustomCombobox
-        
-        self.detail_character_combo = CustomCombobox(
-            label="Nhân vật",
-            placeholder="-- Chọn nhân vật --",
-            searchable=True,
-            size="sm"
-        )
-        detail_layout.addWidget(self.detail_character_combo)
-        
         # Font field (CustomCombobox)
         self.detail_font_combo = CustomCombobox(
             label="Font",
@@ -352,65 +270,83 @@ class OCRResultsTable(QWidget):
     
     def setup_table_connections(self):
         """Setup connections cho table"""
-        # Connect row click để hiển thị detail view VÀ kích hoạt OCR selection mode
-        self.ocr_table.rowClicked.connect(self.on_row_clicked_detail)
-        self.ocr_table.rowClicked.connect(self.on_row_clicked_activate_ocr_mode)
+        self.logger.info(f"[OCR_TABLE] ========== setup_table_connections CALLED ==========")
+        self.logger.info(f"[OCR_TABLE] Connecting ocr_table.rowClicked to on_row_clicked")
+        
+        # CRITICAL: Disconnect trước khi connect để tránh multiple connections
+        try:
+            self.ocr_table.rowClicked.disconnect()
+            self.logger.info(f"[OCR_TABLE] ✓ Disconnected existing rowClicked connections")
+        except:
+            self.logger.info(f"[OCR_TABLE] ℹ No existing rowClicked connections to disconnect")
+        
+        # Connect row click để hiển thị detail view
+        self.logger.info(f"[OCR_TABLE] Connecting rowClicked signal...")
+        self.ocr_table.rowClicked.connect(self.on_row_clicked)
+        self.logger.info(f"[OCR_TABLE] ✓ Connected rowClicked signal successfully")
+        self.logger.info(f"[OCR_TABLE] ========== setup_table_connections EXIT ==========\n")
     
     def on_toggle_ocr_mode(self, checked: bool):
-        """Toggle OCR selection mode"""
-        self.ocr_mode_toggled.emit(checked)
+        """Toggle OCR selection mode - SỬA: Thêm recursion protection"""
+        self.logger.info(f"[OCR_TABLE] ========== on_toggle_ocr_mode ENTRY ==========")
+        self.logger.info(f"[OCR_TABLE] Checked state: {checked}")
+        self.logger.info(f"[OCR_TABLE] Toggling flag state: {getattr(self, '_toggling_ocr_mode', None)}")
         
-        # Update button style
-        if checked:
-            self.ocr_select_btn.setText("✓ OCR Mode Active")
-            self.ocr_select_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: var(--primary);
-                    color: white;
-                    border: 1px solid var(--primary);
-                    border-radius: 6px;
-                    padding: 10px 20px;
-                    font-size: 14px;
-                    font-weight: 500;
-                    min-width: 120px;
-                }
-            """)
-        else:
-            self.ocr_select_btn.setText("🔍 Select OCR Region")
-            self.ocr_select_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: var(--button-second-bg);
-                    color: var(--text-primary);
-                    border: 1px solid var(--border);
-                    border-radius: 6px;
-                    padding: 10px 20px;
-                    font-size: 14px;
-                    font-weight: 500;
-                    min-width: 120px;
-                }
-                QPushButton:hover {
-                    background-color: var(--button-second-bg-hover);
-                }
-            """)
-    
-    def on_row_clicked_activate_ocr_mode(self, row_index: int, row_data: dict):
-        """Kích hoạt OCR mode khi click vào row"""
-        self.logger.info(f"[OCR_TABLE] Row {row_index} clicked - Activating OCR selection mode")
-        
-        # Store current focused row
-        self.current_detail_row = row_index
-        
-        # Kích hoạt OCR mode nếu chưa active
-        if not self.ocr_select_btn.isChecked():
-            self.ocr_select_btn.setChecked(True)
-            self.on_toggle_ocr_mode(True)
+        if hasattr(self, '_toggling_ocr_mode') and self._toggling_ocr_mode:
+            self.logger.warning(f"[OCR_TABLE] BLOCKED: Already toggling OCR mode, preventing recursion")
+            return
+            
+        self.logger.info(f"[OCR_TABLE] Setting _toggling_ocr_mode = True")
+        self._toggling_ocr_mode = True
+        try:
+            self.logger.info(f"[OCR_TABLE] Emitting ocr_mode_toggled signal with checked={checked}")
+            self.ocr_mode_toggled.emit(checked)
+            
+            # Update button style
+            if checked:
+                self.logger.info(f"[OCR_TABLE] Updating button to ACTIVE state")
+                self.ocr_select_btn.setText("✓ OCR Mode Active")
+                self.ocr_select_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: var(--primary);
+                        color: white;
+                        border: 1px solid var(--primary);
+                        border-radius: 6px;
+                        padding: 10px 20px;
+                        font-size: 14px;
+                        font-weight: 500;
+                        min-width: 120px;
+                    }
+                """)
+            else:
+                self.logger.info(f"[OCR_TABLE] Updating button to INACTIVE state")
+                self.ocr_select_btn.setText("🔍 Enable OCR Region Selection")
+                self.ocr_select_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: var(--button-second-bg);
+                        color: var(--text-primary);
+                        border: 1px solid var(--border);
+                        border-radius: 6px;
+                        padding: 10px 20px;
+                        font-size: 14px;
+                        font-weight: 500;
+                        min-width: 120px;
+                    }
+                    QPushButton:hover {
+                        background-color: var(--button-second-bg-hover);
+                    }
+                """)
+        except Exception as e:
+            self.logger.error(f"[OCR_TABLE] ERROR in on_toggle_ocr_mode: {e}")
+            import traceback
+            self.logger.error(f"[OCR_TABLE] Traceback: {traceback.format_exc()}")
+        finally:
+            self.logger.info(f"[OCR_TABLE] Resetting _toggling_ocr_mode = False")
+            self._toggling_ocr_mode = False
+            self.logger.info(f"[OCR_TABLE] ========== on_toggle_ocr_mode EXIT ==========")
     
     def on_manage_characters(self):
-        """Emit signal để mở dialog quản lý characters"""
-        self.manage_characters_requested.emit()
-        
-    def on_manage_characters(self):
-        """Emit signal để mở dialog quản lý characters"""
+        """Mở dialog quản lý characters"""
         from .character_manager_dialog import CharacterManagerDialog
         
         dialog = CharacterManagerDialog(self)
@@ -428,96 +364,312 @@ class OCRResultsTable(QWidget):
             self.refresh_font_comboboxes()
             self.logger.info("[OCR_TABLE] Font settings updated")
         
-    def on_row_clicked_detail(self, row_index: int, row_data: dict):
-        """Handle row click - hiển thị detail view"""
-        self.logger.info(f"[OCR_TABLE] Row clicked: {row_index}")
+    def on_row_clicked(self, row_index: int, row_data: dict):
+        """Handle row click - chỉ hiển thị detail view, KHÔNG tự động bật OCR mode"""
+        self.logger.info(f"[OCR_TABLE] ========== on_row_clicked ENTRY ==========")
+        self.logger.info(f"[OCR_TABLE] Row index: {row_index}")
+        self.logger.info(f"[OCR_TABLE] Row data keys: {list(row_data.keys())}")
+        self.logger.info(f"[OCR_TABLE] Processing flag state: {getattr(self, '_processing_click', None)}")
         
-        # Ẩn edit container (nếu đang mở)
-        self.edit_container.hide()
+        # CRITICAL: Check recursion protection
+        if hasattr(self, '_processing_click') and self._processing_click:
+            self.logger.warning(f"[OCR_TABLE] BLOCKED: Already processing a click, preventing recursion")
+            return
         
-        # Hiển thị detail container
-        self.detail_container.show()
+        self.logger.info(f"[OCR_TABLE] Setting _processing_click = True")
+        self._processing_click = True
         
-        # Store current row
-        self.current_detail_row = row_index
+        try:
+            self.logger.info(f"[OCR_TABLE] Step 1: Hiding edit container")
+            # Ẩn edit container (nếu đang mở)
+            self.edit_container.hide()
+
+            self.logger.info(f"[OCR_TABLE] Step 2: Showing detail container")
+            # Hiển thị detail container
+            self.detail_container.show()
+
+            # Store current row
+            self.logger.info(f"[OCR_TABLE] Step 3: Storing current row: {row_index}")
+            self.current_detail_row = row_index
+
+            # CRITICAL: Disconnect combo signals trước khi load
+            self.logger.info(f"[OCR_TABLE] Step 4: Disconnecting combo signals")
+            self._disconnect_combo_signals()
+
+            # Load fonts và characters vào ComboBox
+            self.logger.info(f"[OCR_TABLE] Step 5: Loading fonts to combo")
+            self._load_fonts_to_detail_combo()
+            
+            self.logger.info(f"[OCR_TABLE] Step 6: Loading characters to combo")
+            self._load_characters_to_detail_combo()
+
+            # Load data vào detail view
+            self.logger.info(f"[OCR_TABLE] Step 7: Setting STT value")
+            stt_value = row_data.get("STT", "")
+            self.logger.info(f"[OCR_TABLE]   - STT value: '{stt_value}'")
+            self.detail_stt_input.setText(stt_value)
+
+            # Set character
+            char_id = row_data.get("_character_id")
+            self.logger.info(f"[OCR_TABLE] Step 8: Setting character ID: {char_id}")
+            self.logger.info(f"[OCR_TABLE]   - Blocking character combo signals")
+            self.detail_character_combo.blockSignals(True)
+            if char_id:
+                self.logger.info(f"[OCR_TABLE]   - Setting character value: {char_id}")
+                self.detail_character_combo.setCurrentValue(char_id)
+            else:
+                self.logger.info(f"[OCR_TABLE]   - Setting character value to None")
+                self.detail_character_combo.setCurrentValue(None)
+            self.logger.info(f"[OCR_TABLE]   - Unblocking character combo signals")
+            self.detail_character_combo.blockSignals(False)
+
+            # Set font
+            current_font = row_data.get("_font_family")
+            self.logger.info(f"[OCR_TABLE] Step 9: Setting font: {current_font}")
+            self.logger.info(f"[OCR_TABLE]   - Blocking font combo signals")
+            self.detail_font_combo.blockSignals(True)
+            if current_font:
+                self.logger.info(f"[OCR_TABLE]   - Setting font value: {current_font}")
+                self.detail_font_combo.setCurrentValue(current_font)
+            else:
+                self.logger.info(f"[OCR_TABLE]   - Setting font value to 'default'")
+                self.detail_font_combo.setCurrentValue("default")
+            self.logger.info(f"[OCR_TABLE]   - Unblocking font combo signals")
+            self.detail_font_combo.blockSignals(False)
+
+            # Set original text
+            original_text = row_data.get("_full_original", "")
+            self.logger.info(f"[OCR_TABLE] Step 10: Setting original text (length: {len(original_text)})")
+            self.logger.info(f"[OCR_TABLE]   - Original text preview: '{original_text[:50]}...'")
+            self.detail_original_input.setText(original_text)
+            
+            # Set translation text
+            translation_text = row_data.get("_full_translation", "")
+            self.logger.info(f"[OCR_TABLE] Step 11: Setting translation text (length: {len(translation_text)})")
+            self.logger.info(f"[OCR_TABLE]   - Translation text preview: '{translation_text[:50]}...'")
+            self.detail_translation_input.setText(translation_text)
+            
+            # CRITICAL: Reconnect combo signals sau khi setup xong
+            self.logger.info(f"[OCR_TABLE] Step 12: Reconnecting combo signals")
+            self._reconnect_combo_signals()
+
+            self.logger.info(f"[OCR_TABLE] ✓ Detail view opened successfully for row {row_index}")
+            
+        except Exception as e:
+            self.logger.error(f"[OCR_TABLE] ✗ ERROR in on_row_clicked: {e}")
+            import traceback
+            self.logger.error(f"[OCR_TABLE] Traceback:\n{traceback.format_exc()}")
+        finally:
+            # Đảm bảo luôn reset flag
+            self.logger.info(f"[OCR_TABLE] Step 13: Resetting _processing_click = False")
+            self._processing_click = False
+            self.logger.info(f"[OCR_TABLE] ========== on_row_clicked EXIT ==========\n")
         
-        # Load fonts và characters vào ComboBox
-        self._load_fonts_to_detail_combo()
-        self._load_characters_to_detail_combo()
-        
-        # Load data vào detail view
-        self.detail_stt_input.setText(row_data.get("STT", ""))
-        
-        # Set character
-        char_id = row_data.get("_character_id")
-        if char_id:
-            self.detail_character_combo.setCurrentValue(char_id)
-        else:
-            self.detail_character_combo.setCurrentValue(None)
-        
-        # Set font
-        current_font = row_data.get("_font_family")
-        if current_font:
-            self.detail_font_combo.setCurrentValue(current_font)
-        else:
-            self.detail_font_combo.setCurrentValue("default")
-        
-        self.detail_original_input.setText(row_data.get("_full_original", ""))
-        self.detail_translation_input.setText(row_data.get("_full_translation", ""))
-        
-        self.logger.info(f"[OCR_TABLE] Detail view opened for row {row_index}")
-        
+    def _disconnect_combo_signals(self):
+        """Disconnect tất cả signals từ combo boxes"""
+        try:
+            self.logger.info(f"[OCR_TABLE] Disconnecting combo box signals...")
+            
+            # Disconnect font combo
+            try:
+                self.detail_font_combo.valueChanged.disconnect()
+                self.logger.info(f"[OCR_TABLE]   - Font combo valueChanged disconnected")
+            except:
+                self.logger.info(f"[OCR_TABLE]   - Font combo had no valueChanged connections")
+            
+            # Disconnect character combo
+            try:
+                self.detail_character_combo.valueChanged.disconnect()
+                self.logger.info(f"[OCR_TABLE]   - Character combo valueChanged disconnected")
+            except:
+                self.logger.info(f"[OCR_TABLE]   - Character combo had no valueChanged connections")
+                
+        except Exception as e:
+            self.logger.error(f"[OCR_TABLE] Error disconnecting combo signals: {e}")
+    
+    def _reconnect_combo_signals(self):
+        """Reconnect combo box signals sau khi setup"""
+        try:
+            self.logger.info(f"[OCR_TABLE] Reconnecting combo box signals...")
+            
+            # KHÔNG reconnect signals vì chúng ta không cần auto-update
+            # User sẽ phải click "Save" để apply changes
+            
+            self.logger.info(f"[OCR_TABLE]   - Skipping signal reconnection (manual save required)")
+                
+        except Exception as e:
+            self.logger.error(f"[OCR_TABLE] Error reconnecting combo signals: {e}")
+    
     def _load_fonts_to_detail_combo(self):
         """Load fonts vào detail view CustomCombobox"""
+        self.logger.info(f"[OCR_TABLE] ========== _load_fonts_to_detail_combo START ==========")
         from core.font_manager import FontManager
         
-        font_manager = FontManager()
-        visible_fonts = font_manager.get_visible_fonts()
-        default_font = font_manager.get_default_font()
+        try:
+            font_manager = FontManager()
+            visible_fonts = font_manager.get_visible_fonts()
+            default_font = font_manager.get_default_font()
+            
+            self.logger.info(f"[OCR_TABLE]   - Visible fonts count: {len(visible_fonts)}")
+            self.logger.info(f"[OCR_TABLE]   - Visible fonts: {visible_fonts[:5]}..." if len(visible_fonts) > 5 else f"[OCR_TABLE]   - Visible fonts: {visible_fonts}")
+            self.logger.info(f"[OCR_TABLE]   - Default font: {default_font}")
+            
+            # CRITICAL: TẮT HOÀN TOÀN combo để tránh recursion
+            self.logger.info(f"[OCR_TABLE]   - Disabling detail_font_combo completely")
+            self.detail_font_combo.setEnabled(False)
+            self.detail_font_combo.blockSignals(True)
+            if hasattr(self.detail_font_combo, 'combobox'):
+                self.detail_font_combo.combobox.blockSignals(True)
+                if hasattr(self.detail_font_combo.combobox, 'lineEdit'):
+                    line_edit = self.detail_font_combo.combobox.lineEdit()
+                    if line_edit:
+                        line_edit.blockSignals(True)
+                self.logger.info(f"[OCR_TABLE]   - Blocked ALL internal signals")
+            
+            # Tạo options
+            font_options = [{"value": "default", "label": "Default"}]
+            for font in visible_fonts:
+                font_options.append({"value": font, "label": font})
+            
+            self.logger.info(f"[OCR_TABLE]   - Total font options: {len(font_options)}")
+            
+            # Set options
+            self.logger.info(f"[OCR_TABLE]   - Calling setOptions() with {len(font_options)} options")
+            try:
+                self.detail_font_combo.setOptions(font_options)
+                self.logger.info(f"[OCR_TABLE]   - setOptions() completed successfully")
+            except RecursionError as re:
+                self.logger.error(f"[OCR_TABLE]   - RecursionError in setOptions(): {re}")
+                raise
+            
+            # Set default font
+            if default_font:
+                self.logger.info(f"[OCR_TABLE]   - Setting current value to default font: '{default_font}'")
+                try:
+                    self.detail_font_combo.setCurrentValue(default_font)
+                    self.logger.info(f"[OCR_TABLE]   - setCurrentValue() completed successfully")
+                except RecursionError as re:
+                    self.logger.error(f"[OCR_TABLE]   - RecursionError in setCurrentValue(): {re}")
+                    raise
+            else:
+                self.logger.info(f"[OCR_TABLE]   - No default font, setting to 'default'")
+                self.detail_font_combo.setCurrentValue("default")
+            
+            self.logger.info(f"[OCR_TABLE]   - Current value after set: {self.detail_font_combo.currentValue()}")
+            
+        except Exception as e:
+            self.logger.error(f"[OCR_TABLE] ✗ ERROR in _load_fonts_to_detail_combo: {e}")
+            import traceback
+            self.logger.error(f"[OCR_TABLE] Traceback:\n{traceback.format_exc()}")
+        finally:
+            # CRITICAL: BẬT LẠI combo và unblock signals
+            self.logger.info(f"[OCR_TABLE]   - Re-enabling detail_font_combo")
+            self.detail_font_combo.blockSignals(False)
+            if hasattr(self.detail_font_combo, 'combobox'):
+                self.detail_font_combo.combobox.blockSignals(False)
+                if hasattr(self.detail_font_combo.combobox, 'lineEdit'):
+                    line_edit = self.detail_font_combo.combobox.lineEdit()
+                    if line_edit:
+                        line_edit.blockSignals(False)
+                self.logger.info(f"[OCR_TABLE]   - Unblocked ALL internal signals")
+            self.detail_font_combo.setEnabled(True)
+            self.logger.info(f"[OCR_TABLE]   - Re-enabled detail_font_combo")
         
-        # Tạo options cho CustomCombobox
-        font_options = [{"value": "default", "label": "Default"}]
-        for font in visible_fonts:
-            font_options.append({"value": font, "label": font})
-        
-        # Set options
-        self.detail_font_combo.setOptions(font_options)
-        
-        # Set default font nếu có
-        if default_font:
-            self.detail_font_combo.setCurrentValue(default_font)
-        else:
-            self.detail_font_combo.setCurrentValue("default")
+        self.logger.info(f"[OCR_TABLE] ========== _load_fonts_to_detail_combo END ==========\n")
             
     def _load_characters_to_detail_combo(self):
         """Load characters vào detail view CustomCombobox"""
+        self.logger.info(f"[OCR_TABLE] ========== _load_characters_to_detail_combo START ==========")
         from core.project_manager import ProjectManager
         
-        project_manager = ProjectManager()
-        characters = project_manager.get_characters()
+        try:
+            project_manager = ProjectManager()
+            characters = project_manager.get_characters()
+            
+            self.logger.info(f"[OCR_TABLE]   - Characters count: {len(characters)}")
+            if characters:
+                self.logger.info(f"[OCR_TABLE]   - First character: {characters[0] if characters else 'None'}")
+            
+            # CRITICAL: TẮT HOÀN TOÀN combo để tránh recursion
+            self.logger.info(f"[OCR_TABLE]   - Disabling detail_character_combo completely")
+            self.detail_character_combo.setEnabled(False)
+            self.detail_character_combo.blockSignals(True)
+            if hasattr(self.detail_character_combo, 'combobox'):
+                self.detail_character_combo.combobox.blockSignals(True)
+                if hasattr(self.detail_character_combo.combobox, 'lineEdit'):
+                    line_edit = self.detail_character_combo.combobox.lineEdit()
+                    if line_edit:
+                        line_edit.blockSignals(True)
+                self.logger.info(f"[OCR_TABLE]   - Blocked ALL internal signals")
+            
+            # Tạo options
+            char_options = [{"value": None, "label": "-- Chọn nhân vật --"}]
+            for char in characters:
+                char_options.append({
+                    "value": char['id'],
+                    "label": char['name']
+                })
+            
+            self.logger.info(f"[OCR_TABLE]   - Total character options: {len(char_options)}")
+            
+            # Set options
+            self.logger.info(f"[OCR_TABLE]   - Calling setOptions() with {len(char_options)} options")
+            try:
+                self.detail_character_combo.setOptions(char_options)
+                self.logger.info(f"[OCR_TABLE]   - setOptions() completed successfully")
+            except RecursionError as re:
+                self.logger.error(f"[OCR_TABLE]   - RecursionError in setOptions(): {re}")
+                raise
+            
+        except Exception as e:
+            self.logger.error(f"[OCR_TABLE] ✗ ERROR in _load_characters_to_detail_combo: {e}")
+            import traceback
+            self.logger.error(f"[OCR_TABLE] Traceback:\n{traceback.format_exc()}")
+        finally:
+            # CRITICAL: BẬT LẠI combo và unblock signals
+            self.logger.info(f"[OCR_TABLE]   - Re-enabling detail_character_combo")
+            self.detail_character_combo.blockSignals(False)
+            if hasattr(self.detail_character_combo, 'combobox'):
+                self.detail_character_combo.combobox.blockSignals(False)
+                if hasattr(self.detail_character_combo.combobox, 'lineEdit'):
+                    line_edit = self.detail_character_combo.combobox.lineEdit()
+                    if line_edit:
+                        line_edit.blockSignals(False)
+                self.logger.info(f"[OCR_TABLE]   - Unblocked ALL internal signals")
+            self.detail_character_combo.setEnabled(True)
+            self.logger.info(f"[OCR_TABLE]   - Re-enabled detail_character_combo")
         
-        # Tạo options cho CustomCombobox
-        char_options = [{"value": None, "label": "-- Chọn nhân vật --"}]
-        for char in characters:
-            char_options.append({
-                "value": char['id'],
-                "label": char['name']
-            })
-        
-        # Set options
-        self.detail_character_combo.setOptions(char_options)
+        self.logger.info(f"[OCR_TABLE] ========== _load_characters_to_detail_combo END ==========\n")
         
     def on_close_detail(self):
         """Đóng detail view"""
+        self.logger.info(f"[OCR_TABLE] ========== on_close_detail CALLED ==========")
+        
+        self.logger.info(f"[OCR_TABLE] Step 1: Hiding detail container")
         self.detail_container.hide()
+        
+        self.logger.info(f"[OCR_TABLE] Step 2: Clearing current_detail_row")
         self.current_detail_row = None
         
-        # Tắt OCR mode khi đóng detail
+        # Tắt OCR mode khi đóng detail (nếu đang bật)
         if self.ocr_select_btn.isChecked():
+            self.logger.info(f"[OCR_TABLE] Step 3: OCR button is checked, turning it off")
+            
+            # Block signals để tránh trigger clicked signal
+            self.logger.info(f"[OCR_TABLE]   - Blocking ocr_select_btn signals")
+            self.ocr_select_btn.blockSignals(True)
             self.ocr_select_btn.setChecked(False)
+            self.ocr_select_btn.blockSignals(False)
+            self.logger.info(f"[OCR_TABLE]   - Unblocked ocr_select_btn signals")
+            
+            # Manually call on_toggle_ocr_mode
+            self.logger.info(f"[OCR_TABLE]   - Manually calling on_toggle_ocr_mode(False)")
             self.on_toggle_ocr_mode(False)
+        else:
+            self.logger.info(f"[OCR_TABLE] Step 3: OCR button not checked, skipping")
         
-        self.logger.info("[OCR_TABLE] Detail view closed")
+        self.logger.info(f"[OCR_TABLE] ✓ Detail view closed successfully")
+        self.logger.info(f"[OCR_TABLE] ========== on_close_detail EXIT ==========\n")
     
     def on_save_detail(self):
         """Lưu thay đổi từ detail view"""
@@ -564,7 +716,7 @@ class OCRResultsTable(QWidget):
             # Refresh table
             self.ocr_table.setData(self.ocr_data)
             
-            self.logger.info(f"[OCR_TABLE] Saved changes from detail view for row {row} (Font: {selected_font})")
+            self.logger.info(f"[OCR_TABLE] Saved changes from detail view for row {row} (Font: {selected_font_value})")
             
             # Đóng detail view sau khi lưu
             self.detail_container.hide()
@@ -621,6 +773,7 @@ class OCRResultsTable(QWidget):
             table_data.append({
                 "STT": str(i + 1),
                 "Character": "-- Select --",
+                "Font": "Default",
                 "Original Text": original_short,
                 "Translation": "",
                 "_full_original": text,
