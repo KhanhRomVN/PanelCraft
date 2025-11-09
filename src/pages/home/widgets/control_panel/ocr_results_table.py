@@ -425,15 +425,17 @@ class OCRResultsTable(QWidget):
 
             # Set font
             current_font = row_data.get("_font_family")
-            self.logger.info(f"[OCR_TABLE] Step 9: Setting font: {current_font}")
+            self.logger.info(f"[OCR_TABLE] Step 9: Setting font from row_data")
+            self.logger.info(f"[OCR_TABLE]   - _font_family value: '{current_font}' (type: {type(current_font).__name__ if current_font is not None else 'NoneType'})")
             self.logger.info(f"[OCR_TABLE]   - Blocking font combo signals")
             self.detail_font_combo.blockSignals(True)
             if current_font:
-                self.logger.info(f"[OCR_TABLE]   - Setting font value: {current_font}")
+                self.logger.info(f"[OCR_TABLE]   - current_font is truthy, setting to: '{current_font}'")
                 self.detail_font_combo.setCurrentValue(current_font)
             else:
-                self.logger.info(f"[OCR_TABLE]   - Setting font value to 'default'")
+                self.logger.info(f"[OCR_TABLE]   - current_font is falsy, setting to 'default'")
                 self.detail_font_combo.setCurrentValue("default")
+            self.logger.info(f"[OCR_TABLE]   - After setCurrentValue(), combo shows: '{self.detail_font_combo.currentValue()}'")
             self.logger.info(f"[OCR_TABLE]   - Unblocking font combo signals")
             self.detail_font_combo.blockSignals(False)
 
@@ -512,7 +514,7 @@ class OCRResultsTable(QWidget):
             
             self.logger.info(f"[OCR_TABLE]   - Visible fonts count: {len(visible_fonts)}")
             self.logger.info(f"[OCR_TABLE]   - Visible fonts: {visible_fonts[:5]}..." if len(visible_fonts) > 5 else f"[OCR_TABLE]   - Visible fonts: {visible_fonts}")
-            self.logger.info(f"[OCR_TABLE]   - Default font: {default_font}")
+            self.logger.info(f"[OCR_TABLE]   - Default font from manager: '{default_font}' (type: {type(default_font).__name__})")
             
             # CRITICAL: TẮT HOÀN TOÀN combo để tránh recursion
             self.logger.info(f"[OCR_TABLE]   - Disabling detail_font_combo completely")
@@ -528,10 +530,13 @@ class OCRResultsTable(QWidget):
             
             # Tạo options
             font_options = [{"value": "default", "label": "Default"}]
+            self.logger.info(f"[OCR_TABLE]   - Added initial option: {font_options[0]}")
+            
             for font in visible_fonts:
                 font_options.append({"value": font, "label": font})
             
             self.logger.info(f"[OCR_TABLE]   - Total font options: {len(font_options)}")
+            self.logger.info(f"[OCR_TABLE]   - First 3 options: {font_options[:3]}")
             
             # Set options
             self.logger.info(f"[OCR_TABLE]   - Calling setOptions() with {len(font_options)} options")
@@ -544,6 +549,8 @@ class OCRResultsTable(QWidget):
             
             # Set default font
             if default_font:
+                self.logger.info(f"[OCR_TABLE]   - Default font is truthy: '{default_font}'")
+                self.logger.info(f"[OCR_TABLE]   - Checking if '{default_font}' exists in visible_fonts: {default_font in visible_fonts}")
                 self.logger.info(f"[OCR_TABLE]   - Setting current value to default font: '{default_font}'")
                 try:
                     self.detail_font_combo.setCurrentValue(default_font)
@@ -552,10 +559,12 @@ class OCRResultsTable(QWidget):
                     self.logger.error(f"[OCR_TABLE]   - RecursionError in setCurrentValue(): {re}")
                     raise
             else:
-                self.logger.info(f"[OCR_TABLE]   - No default font, setting to 'default'")
+                self.logger.info(f"[OCR_TABLE]   - Default font is falsy (None or empty), setting to 'default'")
                 self.detail_font_combo.setCurrentValue("default")
             
-            self.logger.info(f"[OCR_TABLE]   - Current value after set: {self.detail_font_combo.currentValue()}")
+            current_after_set = self.detail_font_combo.currentValue()
+            self.logger.info(f"[OCR_TABLE]   - Current value after set: '{current_after_set}' (type: {type(current_after_set).__name__})")
+            self.logger.info(f"[OCR_TABLE]   - Current text after set: '{self.detail_font_combo.combobox.currentText()}'")
             
         except Exception as e:
             self.logger.error(f"[OCR_TABLE] ✗ ERROR in _load_fonts_to_detail_combo: {e}")

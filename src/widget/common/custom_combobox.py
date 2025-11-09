@@ -299,6 +299,19 @@ class CustomCombobox(QWidget):
             ]
             self.update_badges()
         else:
-            index = self.combobox.findData(value)
-            if index >= 0:
-                self.combobox.setCurrentIndex(index)
+            # Block ALL signals to prevent recursion
+            # Must block both widget and internal combobox
+            was_blocked = self.signalsBlocked()
+            combobox_was_blocked = self.combobox.signalsBlocked()
+            
+            self.blockSignals(True)
+            self.combobox.blockSignals(True)
+            
+            try:
+                index = self.combobox.findData(value)
+                if index >= 0:
+                    self.combobox.setCurrentIndex(index)
+            finally:
+                # Restore original signal state
+                self.blockSignals(was_blocked)
+                self.combobox.blockSignals(combobox_was_blocked)

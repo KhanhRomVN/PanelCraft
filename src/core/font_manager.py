@@ -53,7 +53,9 @@ class FontManager:
     
     def get_visible_fonts(self) -> List[str]:
         """Lấy danh sách fonts hiển thị"""
-        return self.settings.get('visible_fonts', [])
+        fonts = self.settings.get('visible_fonts', [])
+        self.logger.info(f"[FONT_MGR] get_visible_fonts() returning {len(fonts)} fonts: {fonts[:3]}..." if len(fonts) > 3 else f"[FONT_MGR] get_visible_fonts() returning {len(fonts)} fonts: {fonts}")
+        return fonts
     
     def set_visible_fonts(self, fonts: List[str]) -> bool:
         """Set danh sách fonts hiển thị"""
@@ -62,7 +64,9 @@ class FontManager:
     
     def get_default_font(self) -> Optional[str]:
         """Lấy font mặc định (None = Default)"""
-        return self.settings.get('default_font')
+        default = self.settings.get('default_font')
+        self.logger.info(f"[FONT_MGR] get_default_font() returning: '{default}'")
+        return default
     
     def set_default_font(self, font: Optional[str]) -> bool:
         """Set font mặc định (None = Default)"""
