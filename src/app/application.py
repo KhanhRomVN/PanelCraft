@@ -47,7 +47,7 @@ class Application(QApplication):
             
             # Create main window
             self.main_window = MainWindow(self.config, self.theme_manager)
-            self.main_window.show()
+            self.main_window.showMaximized()
             
             return True
             

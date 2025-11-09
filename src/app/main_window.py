@@ -20,7 +20,7 @@ class MainWindow(QMainWindow):
     def setup_ui(self):
         """Setup main window UI"""
         self.setWindowTitle("PanelCraft")
-        self.setGeometry(100, 100, self.config.window_width, self.config.window_height)
+        # Không set geometry cố định, sẽ dùng showMaximized()
         
         # Central widget
         central_widget = QWidget()

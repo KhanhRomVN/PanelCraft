@@ -9,137 +9,26 @@ from typing import List, Optional
 
 from widget.common.custom_button import CustomButton
 from widget.common.custom_modal import CustomModal
+from .interactive_image_label import InteractiveImageLabel
+from .image_display_widget import ImageDisplayWidget
+from .scaled_label import ScaledLabel
+from .canvas_utils import get_toggle_button_style, create_nav_button_style
 from ...services.image_loader import ImageLoader
 from ...services.segmentation_processor import SegmentationProcessor
 from ...services.manga_pipeline_processor import MangaPipelineProcessor
 
-
-class ImageDisplayWidget(QWidget):
-    """Widget hiển thị ảnh với scroll"""
-    
-    def __init__(self, title: str = ""):
-        super().__init__()
-        self.current_pixmap: Optional[QPixmap] = None
-        self.setup_ui(title)
-    
-    def setup_ui(self, title: str):
-        """Setup UI"""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
-        
-        # Title
-        if title:
-            title_label = QLabel(title)
-            title_label.setStyleSheet("""
-                font-size: 14px;
-                font-weight: bold;
-                color: var(--text-primary);
-                padding: 8px;
-                background-color: var(--sidebar-background);
-                border-radius: 4px;
-            """)
-            layout.addWidget(title_label)
-        
-        # Scroll area for image
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setStyleSheet("""
-            QScrollArea {
-                border: 1px solid var(--border);
-                border-radius: 4px;
-                background-color: var(--card-background);
-            }
-        """)
-        
-        # Image label - use ScaledLabel for auto-resize
-        self.image_label = ScaledLabel()
-        self.image_label.setText("No image loaded")
-        
-        scroll_area.setWidget(self.image_label)
-        layout.addWidget(scroll_area)
-    
-    def set_image(self, image_path: str = None, pixmap: QPixmap = None):
-        """Set image to display"""
-        if pixmap:
-            self.current_pixmap = pixmap
-        elif image_path and os.path.exists(image_path):
-            self.current_pixmap = QPixmap(image_path)
-        else:
-            self.current_pixmap = None
-        
-        if self.current_pixmap and not self.current_pixmap.isNull():
-            # ScaledLabel sẽ tự động scale
-            self.image_label.setPixmap(self.current_pixmap)
-        else:
-            self.image_label.setText("Failed to load image")
-    
-    def clear(self):
-        """Clear image"""
-        self.current_pixmap = None
-        self.image_label.clear()
-        self.image_label.setText("No image loaded")
-
-class ScaledLabel(QLabel):
-    """Custom QLabel tự động scale pixmap theo width container"""
-    
-    def __init__(self):
-        super().__init__()
-        self._pixmap: Optional[QPixmap] = None
-        self.setAlignment(Qt.AlignCenter)
-        self.setStyleSheet("""
-            QLabel {
-                background-color: var(--card-background);
-                padding: 8px;
-            }
-        """)
-    
-    def setPixmap(self, pixmap: QPixmap):
-        """Override setPixmap để lưu original pixmap"""
-        if pixmap:
-            self._pixmap = pixmap
-            self.updatePixmap()
-        else:
-            self._pixmap = None
-            super().setPixmap(QPixmap())
-    
-    def resizeEvent(self, event):
-        """Auto resize pixmap khi label resize"""
-        super().resizeEvent(event)
-        if self._pixmap:
-            self.updatePixmap()
-    
-    def updatePixmap(self):
-        """Scale pixmap to fit width while keeping aspect ratio"""
-        if not self._pixmap or self._pixmap.isNull():
-            return
-        
-        # Scale to fit width of label, keep aspect ratio
-        available_width = self.width() - 16  # Trừ padding
-        available_height = self.height() - 16
-        
-        if available_width <= 0 or available_height <= 0:
-            return
-        
-        scaled_pixmap = self._pixmap.scaled(
-            available_width,
-            available_height,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation
-        )
-        
-        super().setPixmap(scaled_pixmap)
 
 class CanvasPanel(QWidget):
     """Canvas panel với 2 sub-panels để hiển thị ảnh gốc và kết quả"""
     
     # Signals
     folder_selected = Signal(str)
-    image_changed = Signal(int)  # Current index
-    segmentation_completed = Signal(int, QImage)  # index, result image
-    text_detection_completed = Signal(int, QImage)  # Thêm signal mới
-    ocr_completed = Signal(int, list)  # Thêm signal mới
-    panel_visibility_changed = Signal(bool, bool)  # left_visible, right_visible
+    image_changed = Signal(int)
+    segmentation_completed = Signal(int, QImage)
+    text_detection_completed = Signal(int, QImage)
+    ocr_completed = Signal(int, list)
+    panel_visibility_changed = Signal(bool, bool)
+    ocr_region_selected = Signal(int, int, int, int, int)
     
     def __init__(self):
         super().__init__()
@@ -147,10 +36,10 @@ class CanvasPanel(QWidget):
         
         self.image_paths: List[str] = []
         self.current_index: int = 0
-        self.segmentation_results: dict = {}  # {index: QImage}
-        self.visualization_results: dict = {}  # THÊM: {index: QImage} - Step 2 visualization
-        self.text_detection_results: dict = {}  # {index: QImage}
-        self.ocr_results: dict = {}  # {index: list}
+        self.segmentation_results: dict = {}
+        self.visualization_results: dict = {}
+        self.text_detection_results: dict = {}
+        self.ocr_results: dict = {}
         
         self.image_loader = ImageLoader()
         self.segmentation_processor: Optional[SegmentationProcessor] = None
@@ -165,7 +54,6 @@ class CanvasPanel(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(4)
         
-        # Toggle buttons bar
         toggle_bar = QWidget()
         toggle_bar.setStyleSheet("""
             QWidget {
@@ -179,7 +67,7 @@ class CanvasPanel(QWidget):
         
         self.toggle_left_btn = QPushButton("◀ Ẩn gốc")
         self.toggle_left_btn.setCheckable(True)
-        self.toggle_left_btn.setStyleSheet(self._get_toggle_button_style())
+        self.toggle_left_btn.setStyleSheet(get_toggle_button_style())
         self.toggle_left_btn.clicked.connect(self.toggle_left_panel)
         toggle_layout.addWidget(self.toggle_left_btn)
         
@@ -187,13 +75,46 @@ class CanvasPanel(QWidget):
         
         self.toggle_right_btn = QPushButton("Ẩn kết quả ▶")
         self.toggle_right_btn.setCheckable(True)
-        self.toggle_right_btn.setStyleSheet(self._get_toggle_button_style())
+        self.toggle_right_btn.setStyleSheet(get_toggle_button_style())
         self.toggle_right_btn.clicked.connect(self.toggle_right_panel)
         toggle_layout.addWidget(self.toggle_right_btn)
         
-        main_layout.addWidget(toggle_bar)
+        nav_bar = QWidget()
+        nav_bar.setStyleSheet("""
+            QWidget {
+                background-color: var(--sidebar-background);
+                border-bottom: 1px solid var(--border);
+            }
+        """)
+        nav_layout = QHBoxLayout(nav_bar)
+        nav_layout.setContentsMargins(8, 4, 8, 4)
+        nav_layout.setSpacing(8)
         
-        # Splitter chứa 2 panels
+        self.nav_buttons = []
+        button_configs = [
+            ("🖼️", "Open Folder"),
+            ("▶️", "Run Pipeline"),
+            ("💾", "Save"),
+            ("↺", "Undo"),
+            ("↻", "Redo"),
+            ("🔍", "Zoom In"),
+            ("🔎", "Zoom Out"),
+            ("⚙️", "Settings"),
+        ]
+        
+        for icon, tooltip in button_configs:
+            btn = QPushButton(icon)
+            btn.setToolTip(tooltip)
+            btn.setFixedSize(32, 32)
+            btn.setStyleSheet(create_nav_button_style())
+            btn.setEnabled(False)
+            self.nav_buttons.append(btn)
+            nav_layout.addWidget(btn)
+        
+        nav_layout.addStretch()
+        
+        main_layout.addWidget(nav_bar)
+        
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setStyleSheet("""
             QSplitter::handle {
@@ -205,20 +126,16 @@ class CanvasPanel(QWidget):
             }
         """)
         
-        # Left panel - Original image
         self.left_panel = ImageDisplayWidget("Original Image")
         self.splitter.addWidget(self.left_panel)
         
-        # Right panel - Processing results
-        self.right_panel = ImageDisplayWidget("Processing Results")
+        self.right_panel = ImageDisplayWidget("Output Image")
         self.splitter.addWidget(self.right_panel)
         
-        # Set initial sizes (50-50)
         self.splitter.setSizes([1, 1])
         
         main_layout.addWidget(self.splitter, 1)
         
-        # Apply focus to receive keyboard events
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setFocus()
     
@@ -261,8 +178,6 @@ class CanvasPanel(QWidget):
     
     def load_folder(self, folder_path: str):
         """Load folder với validation"""
-        
-        # Scan folder for valid images
         valid_extensions = ('.jpg', '.jpeg', '.png')
         all_files = []
         invalid_files = []
@@ -275,7 +190,6 @@ class CanvasPanel(QWidget):
                 else:
                     invalid_files.append(file)
         
-        # Show warning if there are invalid files
         if invalid_files:
             self.show_invalid_files_warning(invalid_files, all_files, folder_path)
         else:
@@ -284,14 +198,12 @@ class CanvasPanel(QWidget):
     def show_invalid_files_warning(self, invalid_files: List[str], 
                                    valid_files: List[str], folder_path: str):
         """Hiển thị cảnh báo file không hợp lệ"""
-        # Create custom modal
         modal = CustomModal(
             title="File không hợp lệ",
             size="md",
             parent=self
         )
         
-        # Create warning content
         content = QWidget()
         content_layout = QVBoxLayout(content)
         content_layout.setSpacing(12)
@@ -303,7 +215,6 @@ class CanvasPanel(QWidget):
         warning_text.setStyleSheet("color: var(--text-primary); font-size: 14px;")
         warning_text.setWordWrap(True)
         
-        # List some invalid files
         if len(invalid_files) <= 5:
             files_text = "\n".join(invalid_files)
         else:
@@ -327,7 +238,6 @@ class CanvasPanel(QWidget):
         modal.setActionButton("Continue", "primary")
         modal.cancel_button.setText("Cancel")
         
-        # Handle response
         result = modal.exec()
         
         if result == CustomModal.Accepted:
@@ -343,13 +253,8 @@ class CanvasPanel(QWidget):
             )
             return
                 
-        # Sort files
         valid_files.sort()
-        
-        # Load images
         self.image_loader.load_images(valid_files)
-        
-        # Emit folder selected
         self.folder_selected.emit(folder_path)
     
     def on_images_loaded(self, image_paths: List[str]):
@@ -360,11 +265,9 @@ class CanvasPanel(QWidget):
         self.text_detection_results.clear()
         self.ocr_results.clear()
         
-        # Display first image
         if self.image_paths:
             self.display_current_image()
         
-        # Set focus để nhận keyboard events
         self.setFocus()
     
     def on_load_error(self, error_msg: str):
@@ -379,29 +282,26 @@ class CanvasPanel(QWidget):
             return
         
         current_path = self.image_paths[self.current_index]
-        
-        # Display original image on left panel
         self.left_panel.set_image(image_path=current_path)
         
-        # Log available results
         self.logger.info(f"[DISPLAY] Current index: {self.current_index}")
         self.logger.info(f"[DISPLAY] Available results:")
         self.logger.info(f"  - Final results: {list(self.segmentation_results.keys())}")
         self.logger.info(f"  - Visualizations: {list(self.visualization_results.keys())}")
         self.logger.info(f"  - Text detections: {list(self.text_detection_results.keys())}")
         
-        # Priority: Final Result (Step 5) > Visualization (Step 2) > Text Detection > Nothing
         if self.current_index in self.segmentation_results:
             self.logger.info(f"[DISPLAY] Showing FINAL RESULT for index {self.current_index}")
-            result_qimage = self.segmentation_results[self.current_index]
-            pixmap = QPixmap.fromImage(result_qimage)
-            self.right_panel.set_image(pixmap=pixmap)
+            result_data = self.segmentation_results[self.current_index]
+            pixmap = QPixmap.fromImage(result_data['image'])
+            rectangles = result_data.get('rectangles', [])
+            self.right_panel.set_image(pixmap=pixmap, rectangles=rectangles)
         elif self.current_index in self.visualization_results:
-            # Hiển thị visualization với hình chữ nhật đỏ (Step 2)
             self.logger.info(f"[DISPLAY] Showing VISUALIZATION for index {self.current_index}")
-            vis_qimage = self.visualization_results[self.current_index]
-            pixmap = QPixmap.fromImage(vis_qimage)
-            self.right_panel.set_image(pixmap=pixmap)
+            vis_data = self.visualization_results[self.current_index]
+            pixmap = QPixmap.fromImage(vis_data['image'])
+            rectangles = vis_data.get('rectangles', [])
+            self.right_panel.set_image(pixmap=pixmap, rectangles=rectangles)
         elif self.current_index in self.text_detection_results:
             self.logger.info(f"[DISPLAY] Showing TEXT DETECTION for index {self.current_index}")
             result_qimage = self.text_detection_results[self.current_index]
@@ -411,13 +311,11 @@ class CanvasPanel(QWidget):
             self.logger.warning(f"[DISPLAY] Right panel: NO RESULTS available for index {self.current_index}")
             self.right_panel.clear()
         
-        # Emit signal for control panel
         self.image_changed.emit(self.current_index)
     
     def previous_image(self):
         """Chuyển về ảnh trước"""
         if self.image_paths and self.current_index > 0:
-            old_index = self.current_index
             self.current_index -= 1
             self.display_current_image()
         else:
@@ -426,7 +324,6 @@ class CanvasPanel(QWidget):
     def next_image(self):
         """Chuyển sang ảnh sau"""
         if self.image_paths and self.current_index < len(self.image_paths) - 1:
-            old_index = self.current_index
             self.current_index += 1
             self.display_current_image()
         else:
@@ -439,33 +336,28 @@ class CanvasPanel(QWidget):
             QMessageBox.warning(self, "Cảnh báo", "Chưa load ảnh nào.")
             return
         
-        # Initialize manga pipeline processor
         if not self.manga_pipeline_processor:
             self.manga_pipeline_processor = MangaPipelineProcessor()
             
-            # Connect signals
             self.manga_pipeline_processor.result_ready.connect(self.on_final_result)
-            self.manga_pipeline_processor.visualization_ready.connect(self.on_visualization_result)  # THÊM
+            self.manga_pipeline_processor.visualization_ready.connect(self.on_visualization_result)
             self.manga_pipeline_processor.ocr_result_ready.connect(self.on_ocr_result)
             self.manga_pipeline_processor.progress_updated.connect(self.on_pipeline_progress)
             self.manga_pipeline_processor.error_occurred.connect(self.on_pipeline_error)
             self.manga_pipeline_processor.completed.connect(self.on_pipeline_completed)
         
-        # Clear previous results
         self.segmentation_results.clear()
-        self.visualization_results.clear()  # THÊM
+        self.visualization_results.clear()
         self.text_detection_results.clear()
         self.ocr_results.clear()
         
-        # Start processing
         self.manga_pipeline_processor.process_images(self.image_paths)
     
     def on_segmentation_result(self, index: int, result_image: QImage):
-        """Handle segmentation result - KHÔNG DÙNG NỮA (chỉ dùng on_final_result)"""
+        """Handle segmentation result - KHÔNG DÙNG NỮA"""
         self.logger.warning(f"[RESULT] on_segmentation_result called (deprecated) - index: {index}")
         self.segmentation_results[index] = result_image
         
-        # Update display if this is the current image
         if index == self.current_index:
             pixmap = QPixmap.fromImage(result_image)
             self.right_panel.set_image(pixmap=pixmap)
@@ -477,7 +369,6 @@ class CanvasPanel(QWidget):
         self.logger.warning(f"[RESULT] on_text_detection_result called (deprecated) - index: {index}")
         self.text_detection_results[index] = result_image
         
-        # Update display if this is the current image
         if index == self.current_index:
             pixmap = QPixmap.fromImage(result_image)
             self.right_panel.set_image(pixmap=pixmap)
@@ -486,11 +377,7 @@ class CanvasPanel(QWidget):
             
     def on_ocr_result(self, index: int, texts: list):
         """Handle OCR result from original segments"""
-        
-        # Store result
         self.ocr_results[index] = texts
-        
-        # Emit signal để ControlPanel có thể hiển thị kết quả OCR
         self.ocr_completed.emit(index, texts)
             
     def on_pipeline_completed(self):
@@ -512,54 +399,71 @@ class CanvasPanel(QWidget):
         self.logger.error(f"[ERROR] Segmentation error: {error_msg}")
         QMessageBox.critical(self, "Lỗi Segmentation", error_msg)
         
-    def on_final_result(self, index: int, result_image: QImage):
+    def on_final_result(self, index: int, result_image: QImage, rectangles: list = None):
         """Handle final result từ pipeline (Step 5 - Final composition)"""
-        
         self.logger.info(f"[FINAL] Received final result for index {index}")
         
-        # Lưu vào segmentation_results để có thể navigate
-        self.segmentation_results[index] = result_image
+        self.segmentation_results[index] = {
+            'image': result_image,
+            'rectangles': rectangles if rectangles else []
+        }
         self.logger.info(f"[FINAL] Stored final result. Total stored: {len(self.segmentation_results)}")
+        self.logger.info(f"[FINAL] Rectangles order (right-to-left, top-to-bottom): {[r['id'] for r in (rectangles if rectangles else [])]}")
         
-        # Update display nếu đây là ảnh hiện tại
         if index == self.current_index:
             self.logger.info(f"[FINAL] Displaying final result for current image {index}")
-            self.logger.info(f"[FINAL] This will override visualization if it was displayed")
             pixmap = QPixmap.fromImage(result_image)
-            self.right_panel.set_image(pixmap=pixmap)
+            self.right_panel.set_image(pixmap=pixmap, rectangles=rectangles if rectangles else [])
         else:
             self.logger.info(f"[FINAL] Not current image (current={self.current_index}, received={index})")
         
-        # Emit signal
         self.segmentation_completed.emit(index, result_image)
         
-    def on_visualization_result(self, index: int, vis_image: QImage):
+    def on_visualization_result(self, index: int, vis_image: QImage, rectangles: list = None):
         """Handle visualization result (step 2 - với hình chữ nhật đỏ)"""
-        
         self.logger.info(f"[VIS] Received visualization for index {index}")
         
-        # Lưu vào dictionary
-        self.visualization_results[index] = vis_image
+        self.visualization_results[index] = {
+            'image': vis_image,
+            'rectangles': rectangles if rectangles else []
+        }
         self.logger.info(f"[VIS] Stored visualization. Total stored: {len(self.visualization_results)}")
+        self.logger.info(f"[VIS] Rectangles order (right-to-left, top-to-bottom): {[r['id'] for r in (rectangles if rectangles else [])]}")
         
-        # Update display nếu đây là ảnh hiện tại
         if index == self.current_index:
             self.logger.info(f"[VIS] Displaying visualization for current image {index}")
             pixmap = QPixmap.fromImage(vis_image)
-            self.right_panel.set_image(pixmap=pixmap)
+            self.right_panel.set_image(pixmap=pixmap, rectangles=rectangles if rectangles else [])
         else:
             self.logger.info(f"[VIS] Not current image (current={self.current_index}, received={index})")
             
     def on_pipeline_progress(self, current: int, total: int, step: str):
         """Handle pipeline progress updates"""
-        
-        # Cập nhật status text nếu có status bar
         status_text = f"Processing {current}/{total}: {step}"
     
     def on_pipeline_error(self, error_msg: str):
         """Handle pipeline error"""
         self.logger.error(f"Pipeline error: {error_msg}")
         QMessageBox.critical(self, "Lỗi Pipeline", error_msg)
+        
+    def on_ocr_region_selected(self, x: int, y: int, w: int, h: int):
+        """Xử lý khi user chọn vùng OCR"""
+        if not self.image_paths or self.current_index >= len(self.image_paths):
+            return
+        
+        self.ocr_region_selected.emit(x, y, w, h, self.current_index)
+        self.logger.info(f"[OCR] Region selected: x={x}, y={y}, w={w}, h={h} on image {self.current_index}")
+        self.left_panel.disable_ocr_mode()
+    
+    def enable_ocr_selection_mode(self):
+        """Bật chế độ chọn vùng OCR"""
+        self.left_panel.enable_ocr_mode()
+        self.logger.info("[OCR] OCR selection mode enabled")
+    
+    def disable_ocr_selection_mode(self):
+        """Tắt chế độ chọn vùng OCR"""
+        self.left_panel.disable_ocr_mode()
+        self.logger.info("[OCR] OCR selection mode disabled")
     
     def toggle_left_panel(self):
         """Toggle hiển thị left panel"""
@@ -570,7 +474,6 @@ class CanvasPanel(QWidget):
             self.left_panel.show()
             self.toggle_left_btn.setText("◀ Ẩn gốc")
         
-        # Emit signal để HomePage điều chỉnh layout
         self.panel_visibility_changed.emit(
             self.left_panel.isVisible(),
             self.right_panel.isVisible()
@@ -585,30 +488,7 @@ class CanvasPanel(QWidget):
             self.right_panel.show()
             self.toggle_right_btn.setText("Ẩn kết quả ▶")
         
-        # Emit signal để HomePage điều chỉnh layout
         self.panel_visibility_changed.emit(
             self.left_panel.isVisible(),
             self.right_panel.isVisible()
         )
-    
-    def _get_toggle_button_style(self) -> str:
-        """Style cho toggle buttons"""
-        return """
-            QPushButton {
-                background-color: var(--card-background);
-                color: var(--text-primary);
-                border: 1px solid var(--border);
-                border-radius: 4px;
-                padding: 4px 12px;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: var(--sidebar-background);
-                border-color: var(--primary);
-            }
-            QPushButton:checked {
-                background-color: var(--primary);
-                color: white;
-                border-color: var(--primary);
-            }
-        """

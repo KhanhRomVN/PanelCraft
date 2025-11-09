@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (QTableWidget, QTableWidgetItem, QVBoxLayout, 
                               QHBoxLayout, QWidget, QLabel, QPushButton, 
-                              QHeaderView, QAbstractItemView, QProgressBar)
+                              QHeaderView, QAbstractItemView, QProgressBar, QSizePolicy)
 from PySide6.QtCore import Qt, Signal, Property, QTimer
 from PySide6.QtGui import QFont, QColor, QBrush
 from typing import List, Dict, Any, Optional
@@ -51,8 +51,23 @@ class CustomTable(QWidget):
         
         # Configure header
         header = self.table_widget.horizontalHeader()
-        header.setStretchLastSection(True)
-        header.setSectionResizeMode(QHeaderView.Interactive)
+        
+        # Set resize modes cho các cột
+        if len(self._headers) > 0:
+            # Cột đầu tiên (STT) - Fit content
+            header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        
+        if len(self._headers) > 1:
+            # Cột thứ 2 (Character) - Fit content
+            header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        
+        # Các cột còn lại - Interactive
+        for i in range(2, len(self._headers)):
+            header.setSectionResizeMode(i, QHeaderView.Interactive)
+        
+        # Cột cuối - Stretch
+        if len(self._headers) > 2:
+            header.setSectionResizeMode(len(self._headers) - 1, QHeaderView.Stretch)
         
         layout.addWidget(self.table_widget)
         
@@ -94,19 +109,28 @@ class CustomTable(QWidget):
                 outline: none;
             }
             QTableWidget::item {
-                padding: 12px 16px;
+                padding: 10px 12px;
                 border: none;
                 color: var(--text-primary);
+                height: 32px;
             }
             QTableWidget::item:selected {
+                background-color: var(--primary);
+                color: white;
+            }
+            QTableWidget::item:hover {
                 background-color: var(--sidebar-item-hover);
             }
             QHeaderView::section {
                 background-color: var(--sidebar-background);
-                padding: 12px 16px;
+                padding: 10px 12px;
                 border: none;
+                border-bottom: 2px solid var(--border);
                 font-weight: bold;
                 color: var(--text-primary);
+            }
+            QHeaderView::section:hover {
+                background-color: var(--sidebar-item-hover);
             }
         """
         
@@ -171,9 +195,17 @@ class CustomTable(QWidget):
                 value = str(item.get(header, ""))
                 table_item = QTableWidgetItem(value)
                 
-                # Center align numeric values
-                if isinstance(item.get(header), (int, float)):
+                # Center align STT column
+                if col == 0:
                     table_item.setTextAlignment(Qt.AlignCenter)
+                
+                # Elide text cho các cột text dài (không phải STT, Character)
+                if col >= 2:
+                    # Giới hạn độ dài hiển thị
+                    if len(value) > 50:
+                        display_value = value[:47] + "..."
+                        table_item.setText(display_value)
+                        table_item.setToolTip(value)  # Hiển thị full text khi hover
                 
                 self.table_widget.setItem(row, col, table_item)
         

@@ -12,8 +12,8 @@ from core.model_manager import ModelManager
 class MangaPipelineThread(QThread):
     """Thread chạy full pipeline: Segmentation -> Text Detection -> OCR -> Final Composition"""
     
-    result_ready = Signal(int, QImage)  # index, final result image (step 5)
-    visualization_ready = Signal(int, QImage)  # THÊM: index, visualization với rectangles
+    result_ready = Signal(int, QImage, list)  # index, final result image, rectangles metadata
+    visualization_ready = Signal(int, QImage, list)  # index, visualization image, rectangles metadata
     ocr_result_ready = Signal(int, list)  # index, list of OCR texts
     progress_updated = Signal(int, int, str)  # current, total, step_name
     error_occurred = Signal(str)
@@ -113,12 +113,12 @@ class MangaPipelineThread(QThread):
                     
                     # Run full pipeline
                     self.logger.info(f"[THREAD] Starting pipeline for image {idx}")
-                    final_result = self.process_single_image(image, idx, total)
+                    final_result, rectangles = self.process_single_image(image, idx, total)
                     self.logger.info(f"[THREAD] Pipeline completed for image {idx}")
                     
                     # Convert to QImage và LƯU TẠM (không emit ngay)
                     qimage = self.numpy_to_qimage(final_result)
-                    final_results.append((idx, qimage))
+                    final_results.append((idx, qimage, rectangles))
                     self.logger.info(f"[THREAD] Final result stored (not emitted yet) for image {idx}")
                     
                 except Exception as e:
@@ -132,9 +132,9 @@ class MangaPipelineThread(QThread):
             self.logger.info(f"[THREAD] All images processed. Emitting {len(final_results)} final results...")
             for result in final_results:
                 if result is not None:
-                    idx, qimage = result
+                    idx, qimage, rectangles = result
                     self.logger.info(f"[THREAD] Emitting final result_ready for image {idx}")
-                    self.result_ready.emit(idx, qimage)
+                    self.result_ready.emit(idx, qimage, rectangles)
                             
         except Exception as e:
             self.logger.error(f"Error in pipeline thread: {e}")
@@ -142,10 +142,10 @@ class MangaPipelineThread(QThread):
             traceback.print_exc()
             self.error_occurred.emit(f"Pipeline error: {str(e)}")
     
-    def process_single_image(self, image: np.ndarray, idx: int, total: int) -> np.ndarray:
+    def process_single_image(self, image: np.ndarray, idx: int, total: int) -> tuple:
         """
         Xử lý 1 ảnh qua full pipeline (5 steps)
-        Returns: Final result image (step 5)
+        Returns: (Final result image, rectangles list)
         """
         original_h, original_w = image.shape[:2]
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -157,14 +157,18 @@ class MangaPipelineThread(QThread):
         
         if not segments:
             self.logger.warning("No segments found, returning original image")
-            return image_rgb
+            return image_rgb, []
+        
+        # ========== SẮP XẾP SEGMENTS THEO THỨ TỰ ĐỌC MANGA ==========
+        # Phải -> Trái (giảm dần theo x), Trên -> Dưới (tăng dần theo y)
+        segments = self.sort_segments_manga_order(segments)
         
         # ========== STEP 1.5: CREATE VISUALIZATION ==========
         self.logger.info(f"[PIPELINE] Image {idx}: Creating visualization with {len(segments)} segments")
-        visualization_image = self.create_segment_outline_visualization(image_rgb, segments)
+        visualization_image, vis_rectangles = self.create_segment_outline_visualization_with_metadata(image_rgb, segments)
         vis_qimage = self.numpy_to_qimage(visualization_image)
         self.logger.info(f"[PIPELINE] Image {idx}: Emitting visualization_ready signal")
-        self.visualization_ready.emit(idx, vis_qimage)
+        self.visualization_ready.emit(idx, vis_qimage, vis_rectangles)
         self.logger.info(f"[PIPELINE] Image {idx}: Visualization signal emitted")
                 
         # ========== STEP 2: Create Blank Canvas ==========
@@ -184,7 +188,7 @@ class MangaPipelineThread(QThread):
         
         # ========== STEP 5: FINAL COMPOSITION - Paste Back to Original ==========
         self.progress_updated.emit(idx + 1, total, "Step 5: Final composition")        
-        final_image = self.paste_cleaned_segments_to_original(image_rgb, segments)
+        final_image, final_rectangles = self.paste_cleaned_segments_to_original_with_metadata(image_rgb, segments)
         
         # ========== STEP 6: OCR Processing ==========
         if self.ocr_model is not None:
@@ -205,10 +209,46 @@ class MangaPipelineThread(QThread):
         else:
             self.logger.warning("OCR model not loaded - skipping OCR step")
         
-        self.logger.info(f"[PIPELINE] Image {idx}: Pipeline completed, returning final image")
-        return final_image
+        self.logger.info(f"[PIPELINE] Image {idx}: Pipeline completed, returning final image with rectangles")
+        return final_image, final_rectangles
     
     # ========== SEGMENTATION METHODS ==========
+    
+    def create_segment_outline_visualization_with_metadata(self, original_image: np.ndarray, segments: List[Dict]) -> tuple:
+        """
+        Tạo visualization VÀ trả về rectangles metadata (KHÔNG vẽ rectangles lên ảnh)
+        
+        Args:
+            original_image: Ảnh gốc (RGB)
+            segments: List segments từ segmentation
+        
+        Returns:
+            (vis_image, rectangles): Ảnh có outline xanh lá, và list rectangles metadata
+        """
+        vis_image = original_image.copy()
+        rectangles = []
+        
+        for segment in segments:
+            mask = segment['mask']
+            
+            # Tìm contours từ mask
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # Vẽ outline màu xanh lá (0, 255, 0) với thickness=3
+            cv2.drawContours(vis_image, contours, -1, (0, 255, 0), thickness=3)
+            
+            # Lưu rectangle metadata (KHÔNG vẽ)
+            if segment.get('rectangle') is not None:
+                rect_x, rect_y, rect_w, rect_h = segment['rectangle']
+                rectangles.append({
+                    'id': segment['id'],
+                    'x': rect_x,
+                    'y': rect_y,
+                    'w': rect_w,
+                    'h': rect_h
+                })
+        
+        return vis_image, rectangles
     
     def extract_balloon_segments(self, image_rgb: np.ndarray) -> List[Dict]:
         """Extract balloon segments using YOLOv8 segmentation"""
@@ -225,6 +265,75 @@ class MangaPipelineThread(QThread):
         segments = self.postprocess_segmentation(outputs, scale, pad_w, pad_h, original_w, original_h, image_rgb)
         
         return segments
+    
+    def sort_segments_manga_order(self, segments: List[Dict]) -> List[Dict]:
+        """
+        Sắp xếp segments theo thứ tự đọc manga: Phải -> Trái, Trên -> Dưới
+        
+        Args:
+            segments: List segments từ segmentation
+        
+        Returns:
+            List[Dict]: Segments đã được sắp xếp và cập nhật lại id
+        """
+        if not segments:
+            return segments
+        
+        # Tính trung điểm của mỗi segment
+        def get_center(seg):
+            x1, y1, x2, y2 = seg['box']
+            return ((x1 + x2) / 2, (y1 + y2) / 2)
+        
+        # Sắp xếp theo:
+        # 1. Y tăng dần (trên xuống dưới)
+        # 2. X giảm dần (phải qua trái)
+        # 
+        # Chia thành các "hàng" dựa trên threshold Y
+        # Trong cùng 1 hàng, sắp xếp theo X giảm dần
+        
+        # Bước 1: Tính toán chiều cao trung bình để xác định threshold
+        heights = [seg['box'][3] - seg['box'][1] for seg in segments]
+        avg_height = sum(heights) / len(heights)
+        row_threshold = avg_height * 0.5  # 2 segment cùng hàng nếu Y khác nhau < 50% chiều cao TB
+        
+        # Bước 2: Nhóm segments theo hàng
+        rows = []
+        for seg in segments:
+            cx, cy = get_center(seg)
+            
+            # Tìm hàng phù hợp
+            placed = False
+            for row in rows:
+                # Lấy Y trung bình của hàng
+                row_y_avg = sum(get_center(s)[1] for s in row) / len(row)
+                
+                if abs(cy - row_y_avg) < row_threshold:
+                    row.append(seg)
+                    placed = True
+                    break
+            
+            if not placed:
+                rows.append([seg])
+        
+        # Bước 3: Sắp xếp các hàng theo Y tăng dần
+        rows.sort(key=lambda row: min(get_center(s)[1] for s in row))
+        
+        # Bước 4: Trong mỗi hàng, sắp xếp theo X giảm dần (phải -> trái)
+        for row in rows:
+            row.sort(key=lambda seg: get_center(seg)[0], reverse=True)
+        
+        # Bước 5: Flatten và cập nhật lại id theo thứ tự mới
+        sorted_segments = []
+        new_id = 0
+        for row in rows:
+            for seg in row:
+                seg['id'] = new_id
+                sorted_segments.append(seg)
+                new_id += 1
+        
+        self.logger.info(f"[SORT] Sorted {len(sorted_segments)} segments into {len(rows)} rows")
+        
+        return sorted_segments
     
     def create_segment_outline_visualization(self, original_image: np.ndarray, segments: List[Dict]) -> np.ndarray:
         """
@@ -587,9 +696,10 @@ class MangaPipelineThread(QThread):
     
     # ========== FINAL COMPOSITION ==========
     
-    def paste_cleaned_segments_to_original(self, original_image: np.ndarray, segments: List[Dict]) -> np.ndarray:
-        """Paste cleaned balloon segments back to original image"""
+    def paste_cleaned_segments_to_original_with_metadata(self, original_image: np.ndarray, segments: List[Dict]) -> tuple:
+        """Paste cleaned balloon segments back to original image VÀ trả về rectangles metadata"""
         final_image = original_image.copy()
+        rectangles = []
         
         for segment in segments:
             x1, y1, x2, y2 = segment['box']
@@ -609,16 +719,19 @@ class MangaPipelineThread(QThread):
             
             final_image[y1:y2, x1:x2] = np.where(mask_3ch > 0, cleaned, roi)
         
-        # ========== VẼ RED RECTANGLES SAU KHI PASTE ==========
+        # ========== LƯU RECTANGLES METADATA (KHÔNG vẽ) ==========
         for segment in segments:
-            # Vẽ hình chữ nhật đỏ nếu có
             if segment.get('rectangle') is not None:
                 rect_x, rect_y, rect_w, rect_h = segment['rectangle']
-                # Vẽ màu đỏ (255, 0, 0) với thickness=2
-                cv2.rectangle(final_image, (rect_x, rect_y), (rect_x + rect_w, rect_y + rect_h), 
-                            (255, 0, 0), thickness=2)
+                rectangles.append({
+                    'id': segment['id'],
+                    'x': rect_x,
+                    'y': rect_y,
+                    'w': rect_w,
+                    'h': rect_h
+                })
         
-        return final_image
+        return final_image, rectangles
     
     def run_ocr_on_segment(self, segment_image: np.ndarray) -> str:
         """
@@ -767,8 +880,8 @@ class MangaPipelineThread(QThread):
 class MangaPipelineProcessor(QObject):
     """Service để xử lý full manga pipeline"""
     
-    result_ready = Signal(int, QImage)  # index, final result
-    visualization_ready = Signal(int, QImage)  # THÊM: visualization với rectangles
+    result_ready = Signal(int, QImage, list)  # index, final result, rectangles
+    visualization_ready = Signal(int, QImage, list)  # visualization image, rectangles
     ocr_result_ready = Signal(int, list)  # index, OCR texts
     progress_updated = Signal(int, int, str)  # current, total, step
     error_occurred = Signal(str)
@@ -873,13 +986,13 @@ class MangaPipelineProcessor(QObject):
         """Forward OCR result"""
         self.ocr_result_ready.emit(index, texts)
         
-    def on_visualization_ready(self, index: int, vis_image: QImage):
+    def on_visualization_ready(self, index: int, vis_image: QImage, rectangles: list):
         """Forward visualization signal"""
-        self.visualization_ready.emit(index, vis_image)
+        self.visualization_ready.emit(index, vis_image, rectangles)
     
-    def on_result_ready(self, index: int, result_image: QImage):
+    def on_result_ready(self, index: int, result_image: QImage, rectangles: list):
         """Forward result"""
-        self.result_ready.emit(index, result_image)
+        self.result_ready.emit(index, result_image, rectangles)
     
     def on_progress_updated(self, current: int, total: int, step: str):
         """Forward progress"""

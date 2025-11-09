@@ -47,9 +47,9 @@ class HomePage(QWidget):
         self.control_panel = ControlPanel()
         self.main_splitter.addWidget(self.control_panel)
         
-        # Set initial sizes: 70% canvas, 30% control
+        # Set initial sizes: 60% canvas, 40% control
         total_width = 1000  # giá trị tham chiếu
-        self.main_splitter.setSizes([int(total_width * 0.7), int(total_width * 0.3)])
+        self.main_splitter.setSizes([int(total_width * 0.6), int(total_width * 0.4)])
         
         # Set minimum width cho control panel
         self.control_panel.setMinimumWidth(300)
@@ -69,12 +69,14 @@ class HomePage(QWidget):
         self.canvas_panel.image_changed.connect(self.control_panel.on_image_changed)
         self.canvas_panel.segmentation_completed.connect(self.on_processing_step_completed)
         self.canvas_panel.ocr_completed.connect(self.control_panel.on_ocr_result)
+        self.canvas_panel.ocr_region_selected.connect(self.on_ocr_region_selected)
         
         # Connect panel visibility signals
         self.canvas_panel.panel_visibility_changed.connect(self.on_canvas_panel_visibility_changed)
         
         # Connect control panel signals
         self.control_panel.run_model_requested.connect(self.on_run_model)
+        self.control_panel.ocr_mode_toggled.connect(self.on_ocr_mode_toggled)
         
         # Connect internal signals
         self.folder_selected.connect(self.control_panel.on_folder_loaded)
@@ -108,11 +110,30 @@ class HomePage(QWidget):
             new_control_width = int(total_width * 0.95)  # 95% cho control
         elif not left_visible or not right_visible:
             # 1 panel ẩn -> Canvas Panel trung bình
-            new_canvas_width = int(total_width * 0.45)  # 45%
-            new_control_width = int(total_width * 0.55)  # 55%
+            new_canvas_width = int(total_width * 0.40)  # 40%
+            new_control_width = int(total_width * 0.60)  # 60%
         else:
             # Cả 2 panels đều hiện -> Tỷ lệ ban đầu
-            new_canvas_width = int(total_width * 0.7)  # 70%
-            new_control_width = int(total_width * 0.3)  # 30%
+            new_canvas_width = int(total_width * 0.6)  # 60%
+            new_control_width = int(total_width * 0.4)  # 40%
         
         self.main_splitter.setSizes([new_canvas_width, new_control_width])
+        
+    def on_ocr_mode_toggled(self, enabled: bool):
+        """Handle OCR mode toggle từ control panel"""
+        if enabled:
+            self.canvas_panel.enable_ocr_selection_mode()
+        else:
+            self.canvas_panel.disable_ocr_selection_mode()
+    
+    def on_ocr_region_selected(self, x: int, y: int, w: int, h: int, image_index: int):
+        """Handle khi user chọn vùng OCR"""
+        self.logger.info(f"[HOME] OCR region selected: x={x}, y={y}, w={w}, h={h}, image={image_index}")
+        
+        # TODO: Implement OCR processing cho region này
+        # 1. Crop image theo coordinates
+        # 2. Chạy OCR model
+        # 3. Update control panel với kết quả mới
+        
+        # Placeholder: In ra log
+        self.logger.info(f"[HOME] Would run OCR on region ({x}, {y}, {w}, {h}) of image {image_index}")
