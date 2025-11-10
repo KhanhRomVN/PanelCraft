@@ -249,7 +249,7 @@ class ProjectManager:
             # Set current project
             self.project_data = projects_db[project_id]
             self._save_current_project_id(project_id)
-            
+                
             return True
         except Exception as e:
             self.logger.error(f"Error switching project: {e}")

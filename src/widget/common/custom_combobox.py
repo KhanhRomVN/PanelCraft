@@ -303,27 +303,35 @@ class CustomCombobox(QWidget):
     
     def setCurrentValue(self, value):   
         """Set current value"""
-        if self._multiple and isinstance(value, list):
-            self._selected_values = value
-            self._selected_items = [
-                opt.get("label", "") for opt in self._options 
-                if opt.get("value", "") in value
-            ]
-            self.update_badges()
-        else:
-            # Block ALL signals to prevent recursion
-            # Must block both widget and internal combobox
-            was_blocked = self.signalsBlocked()
-            combobox_was_blocked = self.combobox.signalsBlocked()
-            
-            self.blockSignals(True)
-            self.combobox.blockSignals(True)
-            
-            try:
-                index = self.combobox.findData(value)
-                if index >= 0:
-                    self.combobox.setCurrentIndex(index)
-            finally:
-                # Restore original signal state
-                self.blockSignals(was_blocked)
-                self.combobox.blockSignals(combobox_was_blocked)
+        # ========== Recursion Guard ==========
+        if hasattr(self, '_setting_value') and self._setting_value:
+            return
+        
+        self._setting_value = True
+        
+        try:
+            if self._multiple and isinstance(value, list):
+                self._selected_values = value
+                self._selected_items = [
+                    opt.get("label", "") for opt in self._options 
+                    if opt.get("value", "") in value
+                ]
+                self.update_badges()
+            else:
+                # Block ALL signals to prevent recursion
+                was_blocked = self.signalsBlocked()
+                combobox_was_blocked = self.combobox.signalsBlocked()
+                
+                self.blockSignals(True)
+                self.combobox.blockSignals(True)
+                
+                try:
+                    index = self.combobox.findData(value)
+                    if index >= 0:
+                        self.combobox.setCurrentIndex(index)
+                finally:
+                    # Restore original signal state
+                    self.blockSignals(was_blocked)
+                    self.combobox.blockSignals(combobox_was_blocked)
+        finally:
+            self._setting_value = False
