@@ -106,7 +106,6 @@ class CreateMangaDialog(QDialog):
             
             if success:
                 action_text = "Đã đổi" if self.is_switching else "Đã tạo"
-                self.logger.info(f"{action_text} manga project: {name}")
                 QMessageBox.information(
                     self, 
                     "Thành công", 

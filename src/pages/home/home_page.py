@@ -84,7 +84,6 @@ class HomePage(QWidget):
                 self.control_panel.run_model_requested.disconnect()
                 self.control_panel.ocr_mode_toggled.disconnect()
             
-            self.logger.info("[HOME] Cleanup completed")
         except Exception as e:
             self.logger.error(f"[HOME] Error during cleanup: {e}")
     
@@ -165,19 +164,9 @@ class HomePage(QWidget):
     
     def on_ocr_region_selected(self, x: int, y: int, w: int, h: int, image_index: int):
         """Handle khi user chọn vùng OCR"""
-        self.logger.info(f"[HOME] OCR region selected: x={x}, y={y}, w={w}, h={h}, image={image_index}")
-        
-        # TODO: Implement OCR processing cho region này
-        # 1. Crop image theo coordinates
-        # 2. Chạy OCR model
-        # 3. Update control panel với kết quả mới
-        
-        # Placeholder: In ra log
-        self.logger.info(f"[HOME] Would run OCR on region ({x}, {y}, {w}, {h}) of image {image_index}")
-        
+                
     def on_ocr_region_result(self, text: str):
         """Handle khi OCR region processing hoàn thành"""
-        self.logger.info(f"[HOME] OCR region result received: {text[:50]}...")
         
         # Forward kết quả OCR đến control panel để update vào row đang focus
         self.control_panel.on_ocr_region_result(text)

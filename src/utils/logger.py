@@ -51,8 +51,18 @@ class ColoredFormatter(logging.Formatter):
         # Thêm màu cho logger name
         record.name = f"{self.NAME_COLOR}{record.name}{self.RESET}"
         
-        # Format message
+        # Format message với super() để có timestamp
         formatted = super().format(record)
+        
+        # Thêm màu cho timestamp (phần đầu của formatted string)
+        # Format mặc định: "2024-01-01 12:00:00 - name - LEVEL - message"
+        # Chúng ta sẽ thêm màu cho phần timestamp
+        if ' - ' in formatted:
+            parts = formatted.split(' - ', 1)
+            if len(parts) == 2:
+                timestamp = parts[0]
+                rest = parts[1]
+                formatted = f"{self.TIMESTAMP_COLOR}{timestamp}{self.RESET} - {rest}"
         
         # Khôi phục giá trị gốc
         record.levelname = levelname_orig

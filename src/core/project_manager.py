@@ -38,7 +38,6 @@ class ProjectManager:
         current_id = self._load_current_project_id()
         
         if not current_id:
-            self.logger.info("No current project set")
             return {}
         
         # Load project from database
@@ -215,7 +214,6 @@ class ProjectManager:
                 self.project_data = new_project
                 self._save_current_project_id(project_id)
                 
-                self.logger.info(f"Project created successfully: {name} (ID: {project_id})")
                 return project_id
             else:
                 self.logger.error("Failed to save new project to database")
@@ -232,7 +230,6 @@ class ProjectManager:
             project_id = self._create_project_in_db(name, author, description)
             
             if project_id:
-                self.logger.info(f"Created and set current project: {name} (ID: {project_id})")
                 return True
             
             return False
@@ -253,7 +250,6 @@ class ProjectManager:
             self.project_data = projects_db[project_id]
             self._save_current_project_id(project_id)
             
-            self.logger.info(f"Switched to project: {self.project_data.get('name')} (ID: {project_id})")
             return True
         except Exception as e:
             self.logger.error(f"Error switching project: {e}")

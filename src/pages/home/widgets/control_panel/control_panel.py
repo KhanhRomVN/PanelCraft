@@ -219,9 +219,7 @@ class ControlPanel(QWidget):
         
         Args:
             text: Kết quả OCR
-        """
-        self.logger.info(f"[CONTROL] Received OCR region result: {text[:50]}...")
-        
+        """        
         # Forward đến OCR results table
         self.ocr_results_table.on_ocr_region_result(text)
     

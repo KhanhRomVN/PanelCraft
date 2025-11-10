@@ -125,7 +125,6 @@ class CharacterManagerDialog(QDialog):
         if success:
             self.load_characters()
             self.name_input.clear()
-            self.logger.info(f"Added character: {name}")
         else:
             QMessageBox.critical(self, "Lỗi", "Không thể thêm nhân vật!")
     
@@ -153,6 +152,5 @@ class CharacterManagerDialog(QDialog):
             
             if success:
                 self.load_characters()
-                self.logger.info(f"Deleted character: {char_name}")
             else:
                 QMessageBox.critical(self, "Lỗi", "Không thể xóa nhân vật!")

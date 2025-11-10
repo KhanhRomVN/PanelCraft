@@ -121,9 +121,7 @@ class MangaPipelineThread(QThread):
             final_results = []  # THÊM: Lưu tạm final results
             
             for idx, image_path in enumerate(self.image_paths):
-                try:
-                    self.logger.info(f"[THREAD] ========== Processing image {idx}/{total} ==========")
-                    
+                try:                    
                     # Load image
                     image = cv2.imread(image_path)
                     if image is None:
@@ -132,14 +130,11 @@ class MangaPipelineThread(QThread):
                         continue
                     
                     # Run full pipeline
-                    self.logger.info(f"[THREAD] Starting pipeline for image {idx}")
                     final_result, rectangles = self.process_single_image(image, idx, total)
-                    self.logger.info(f"[THREAD] Pipeline completed for image {idx}")
                     
                     # Convert to QImage và LƯU TẠM (không emit ngay)
                     qimage = self.numpy_to_qimage(final_result)
                     final_results.append((idx, qimage, rectangles))
-                    self.logger.info(f"[THREAD] Final result stored (not emitted yet) for image {idx}")
                     
                 except Exception as e:
                     self.logger.error(f"Error processing image {idx}: {e}")
@@ -149,11 +144,9 @@ class MangaPipelineThread(QThread):
                     continue
             
             # ========== EMIT TẤT CẢ FINAL RESULTS SAU KHI XONG HẾT ==========
-            self.logger.info(f"[THREAD] All images processed. Emitting {len(final_results)} final results...")
             for result in final_results:
                 if result is not None:
                     idx, qimage, rectangles = result
-                    self.logger.info(f"[THREAD] Emitting final result_ready for image {idx}")
                     self.result_ready.emit(idx, qimage, rectangles)
                             
         except Exception as e:
@@ -184,12 +177,9 @@ class MangaPipelineThread(QThread):
         segments = self.sort_segments_manga_order(segments)
         
         # ========== STEP 1.5: CREATE VISUALIZATION ==========
-        self.logger.info(f"[PIPELINE] Image {idx}: Creating visualization with {len(segments)} segments")
         visualization_image, vis_rectangles = self.create_segment_outline_visualization_with_metadata(image_rgb, segments)
         vis_qimage = self.numpy_to_qimage(visualization_image)
-        self.logger.info(f"[PIPELINE] Image {idx}: Emitting visualization_ready signal")
         self.visualization_ready.emit(idx, vis_qimage, vis_rectangles)
-        self.logger.info(f"[PIPELINE] Image {idx}: Visualization signal emitted")
                 
         # ========== STEP 2: Create Blank Canvas ==========
         self.progress_updated.emit(idx + 1, total, "Step 2: Creating canvas")
@@ -224,12 +214,10 @@ class MangaPipelineThread(QThread):
                     ocr_texts.append("[OCR ERROR]")
             
             # Emit OCR results
-            self.logger.info(f"[PIPELINE] Image {idx}: Emitting OCR results with {len(ocr_texts)} texts")
             self.ocr_result_ready.emit(idx, ocr_texts)
         else:
             self.logger.warning("OCR model not loaded - skipping OCR step")
         
-        self.logger.info(f"[PIPELINE] Image {idx}: Pipeline completed, returning final image with rectangles")
         return final_image, final_rectangles
     
     # ========== SEGMENTATION METHODS ==========
@@ -345,9 +333,7 @@ class MangaPipelineThread(QThread):
                 seg['id'] = new_id
                 sorted_segments.append(seg)
                 new_id += 1
-        
-        self.logger.info(f"[SORT] Sorted {len(sorted_segments)} segments into {len(rows)} rows")
-        
+                
         return sorted_segments
     
     def create_segment_outline_visualization(self, original_image: np.ndarray, segments: List[Dict]) -> np.ndarray:

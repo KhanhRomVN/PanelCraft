@@ -101,7 +101,6 @@ class ImageDisplayWidget(QWidget):
         """Handle khi user chọn vùng OCR từ InteractiveImageLabel"""
         import logging
         logger = logging.getLogger(__name__)
-        logger.info(f"[IMAGE_DISPLAY] OCR region received: x={x}, y={y}, w={w}, h={h}")
         
         # Tìm CanvasPanel (parent của parent vì ImageDisplayWidget nằm trong QSplitter)
         canvas_panel = None
@@ -115,7 +114,6 @@ class ImageDisplayWidget(QWidget):
             parent = parent.parent()
         
         if canvas_panel:
-            logger.info(f"[IMAGE_DISPLAY] Found CanvasPanel, forwarding OCR region")
             canvas_panel.on_ocr_region_selected(x, y, w, h)
         else:
             logger.error(f"[IMAGE_DISPLAY] Could not find CanvasPanel in parent hierarchy")
@@ -485,29 +483,19 @@ class CanvasPanel(QWidget):
         # Display original image on left panel
         self.left_panel.set_image(image_path=current_path)
         
-        # Log available results
-        self.logger.info(f"[DISPLAY] Current index: {self.current_index}")
-        self.logger.info(f"[DISPLAY] Available results:")
-        self.logger.info(f"  - Final results: {list(self.segmentation_results.keys())}")
-        self.logger.info(f"  - Visualizations: {list(self.visualization_results.keys())}")
-        self.logger.info(f"  - Text detections: {list(self.text_detection_results.keys())}")
-        
         # Priority: Final Result (Step 5) > Visualization (Step 2) > Text Detection > Nothing
         if self.current_index in self.segmentation_results:
-            self.logger.info(f"[DISPLAY] Showing FINAL RESULT for index {self.current_index}")
             result_data = self.segmentation_results[self.current_index]
             pixmap = QPixmap.fromImage(result_data['image'])
             rectangles = result_data.get('rectangles', [])
             self.right_panel.set_image(pixmap=pixmap, rectangles=rectangles)
         elif self.current_index in self.visualization_results:
             # Hiển thị visualization với hình chữ nhật đỏ (Step 2)
-            self.logger.info(f"[DISPLAY] Showing VISUALIZATION for index {self.current_index}")
             vis_data = self.visualization_results[self.current_index]
             pixmap = QPixmap.fromImage(vis_data['image'])
             rectangles = vis_data.get('rectangles', [])
             self.right_panel.set_image(pixmap=pixmap, rectangles=rectangles)
         elif self.current_index in self.text_detection_results:
-            self.logger.info(f"[DISPLAY] Showing TEXT DETECTION for index {self.current_index}")
             result_qimage = self.text_detection_results[self.current_index]
             pixmap = QPixmap.fromImage(result_qimage)
             self.right_panel.set_image(pixmap=pixmap)
@@ -617,52 +605,35 @@ class CanvasPanel(QWidget):
         QMessageBox.critical(self, "Lỗi Segmentation", error_msg)
         
     def on_final_result(self, index: int, result_image: QImage, rectangles: list = None):
-        """Handle final result từ pipeline (Step 5 - Final composition)"""
-        
-        self.logger.info(f"[FINAL] Received final result for index {index}")
-        
+        """Handle final result từ pipeline (Step 5 - Final composition)"""        
         # Rectangles đã được sắp xếp trong pipeline theo thứ tự đọc manga
         # Lưu vào segmentation_results với rectangles metadata
         self.segmentation_results[index] = {
             'image': result_image,
             'rectangles': rectangles if rectangles else []
         }
-        self.logger.info(f"[FINAL] Stored final result. Total stored: {len(self.segmentation_results)}")
-        self.logger.info(f"[FINAL] Rectangles order (right-to-left, top-to-bottom): {[r['id'] for r in (rectangles if rectangles else [])]}")
         
         # Update display nếu đây là ảnh hiện tại
         if index == self.current_index:
-            self.logger.info(f"[FINAL] Displaying final result for current image {index}")
-            self.logger.info(f"[FINAL] This will override visualization if it was displayed")
             pixmap = QPixmap.fromImage(result_image)
             self.right_panel.set_image(pixmap=pixmap, rectangles=rectangles if rectangles else [])
-        else:
-            self.logger.info(f"[FINAL] Not current image (current={self.current_index}, received={index})")
         
         # Emit signal
         self.segmentation_completed.emit(index, result_image)
         
     def on_visualization_result(self, index: int, vis_image: QImage, rectangles: list = None):
-        """Handle visualization result (step 2 - với hình chữ nhật đỏ)"""
-        
-        self.logger.info(f"[VIS] Received visualization for index {index}")
-        
+        """Handle visualization result (step 2 - với hình chữ nhật đỏ)"""        
         # Rectangles đã được sắp xếp trong pipeline theo thứ tự đọc manga
         # Lưu vào dictionary với rectangles metadata
         self.visualization_results[index] = {
             'image': vis_image,
             'rectangles': rectangles if rectangles else []
         }
-        self.logger.info(f"[VIS] Stored visualization. Total stored: {len(self.visualization_results)}")
-        self.logger.info(f"[VIS] Rectangles order (right-to-left, top-to-bottom): {[r['id'] for r in (rectangles if rectangles else [])]}")
         
         # Update display nếu đây là ảnh hiện tại
         if index == self.current_index:
-            self.logger.info(f"[VIS] Displaying visualization for current image {index}")
             pixmap = QPixmap.fromImage(vis_image)
             self.right_panel.set_image(pixmap=pixmap, rectangles=rectangles if rectangles else [])
-        else:
-            self.logger.info(f"[VIS] Not current image (current={self.current_index}, received={index})")
             
     def on_pipeline_progress(self, current: int, total: int, step: str):
         """Handle pipeline progress updates"""
@@ -677,17 +648,10 @@ class CanvasPanel(QWidget):
         
     def on_ocr_region_selected(self, x: int, y: int, w: int, h: int):
         """Xử lý khi user chọn vùng OCR"""
-        self.logger.info(f"[OCR] ========== on_ocr_region_selected CALLED ==========")
-        self.logger.info(f"[OCR] Coordinates: x={x}, y={y}, w={w}, h={h}")
-        self.logger.info(f"[OCR] Current index: {self.current_index}")
-        self.logger.info(f"[OCR] Image paths count: {len(self.image_paths) if self.image_paths else 0}")
-        
         if not self.image_paths or self.current_index >= len(self.image_paths):
             self.logger.error(f"[OCR] Cannot process - no images or invalid index")
             return
-        
-        self.logger.info(f"[OCR] Region selected: x={x}, y={y}, w={w}, h={h} on image {self.current_index}")
-        
+                
         # 1. Crop image theo coordinates
         import cv2
         current_image_path = self.image_paths[self.current_index]
@@ -710,17 +674,11 @@ class CanvasPanel(QWidget):
             return
         
         # 2. Chạy OCR model
-        self.logger.info(f"[OCR] Running OCR on cropped region...")
         ocr_text = self._run_ocr_on_region(cropped)
-        
-        self.logger.info(f"[OCR] OCR result: {ocr_text[:50]}...")
-        self.logger.info(f"[OCR] Emitting ocr_region_result_ready signal with text length: {len(ocr_text)}")
         
         # 3. Emit signal với kết quả OCR
         self.ocr_region_result_ready.emit(ocr_text)
-        
-        self.logger.info(f"[OCR] Signal emitted successfully")
-        
+                
         # Tắt OCR mode sau khi chọn xong
         self.left_panel.disable_ocr_mode()
     
@@ -737,10 +695,8 @@ class CanvasPanel(QWidget):
         try:
             # Load OCR model nếu chưa có (cache để tránh load lại nhiều lần)
             if self.ocr_model is None:
-                self.logger.info("[OCR] Loading OCR model (first time)...")
                 from manga_ocr import MangaOcr
                 self.ocr_model = MangaOcr()
-                self.logger.info("[OCR] OCR model loaded successfully")
             
             # Convert numpy array to PIL Image
             from PIL import Image
@@ -760,12 +716,10 @@ class CanvasPanel(QWidget):
     def enable_ocr_selection_mode(self):
         """Bật chế độ chọn vùng OCR"""
         self.left_panel.enable_ocr_mode()
-        self.logger.info("[OCR] OCR selection mode enabled")
     
     def disable_ocr_selection_mode(self):
         """Tắt chế độ chọn vùng OCR"""
         self.left_panel.disable_ocr_mode()
-        self.logger.info("[OCR] OCR selection mode disabled")
     
     def toggle_left_panel(self):
         """Toggle hiển thị left panel"""

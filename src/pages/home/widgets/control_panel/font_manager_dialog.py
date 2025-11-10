@@ -250,10 +250,6 @@ class FontManagerDialog(QDialog):
         item.setSizeHint(item_widget.sizeHint())
         self.selected_font_list.addItem(item)
         self.selected_font_list.setItemWidget(item, item_widget)
-        
-        self.logger.info(f"Added font to selected list: {font_family}")
-        
-    
     
     def remove_font_from_selected(self, font_family: str):
         """Xóa font khỏi danh sách đã chọn"""
@@ -266,11 +262,8 @@ class FontManagerDialog(QDialog):
                 if widget.font_name == font_family:
                     # Xóa item khỏi selected list
                     self.selected_font_list.takeItem(i)
-                    
                     # Uncheck checkbox trong danh sách chính
                     self.uncheck_font_in_list(font_family)
-                    
-                    self.logger.info(f"Removed font from selected list: {font_family}")
                     break
         
     def create_selected_font_widget(self, font_family: str) -> QWidget:
@@ -348,9 +341,7 @@ class FontManagerDialog(QDialog):
         
         # Update heart icons cho tất cả items
         self.update_heart_icons(font_family)
-        
-        self.logger.info(f"Set default font: {font_family}")
-        
+                
     def update_heart_icons(self, default_font: str):
         """Cập nhật heart icons - highlight font mặc định"""
         for i in range(self.selected_font_list.count()):
@@ -471,7 +462,6 @@ class FontManagerDialog(QDialog):
         
         if success:
             default_text = default_font if default_font else "Default (System)"
-            self.logger.info(f"Saved {len(selected_fonts)} visible fonts, default: {default_text}")
             QMessageBox.information(
                 self,
                 "Thành công",

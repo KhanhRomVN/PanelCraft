@@ -211,7 +211,6 @@ class SelectProjectDialog(QDialog):
         
         if success:
             self.selected_project_id = project_id
-            self.logger.info(f"[SELECT] Switched to project: {project_name} (ID: {project_id})")
             self.accept()
         else:
             QMessageBox.critical(
@@ -226,10 +225,7 @@ class SelectProjectDialog(QDialog):
         
         dialog = CreateMangaDialog(self, is_switching=False)
         if dialog.exec():
-            # Project đã được tạo thành công
-            # Refresh danh sách projects KHÔNG đóng dialog
             self.load_projects()
-            self.logger.info("New project created, refreshed project list")
     
     def get_selected_project_id(self):
         """Lấy ID của project đã chọn"""

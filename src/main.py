@@ -6,6 +6,20 @@ import signal
 # Thêm src vào path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
+# Setup colored logging cho toàn bộ app
+from utils.logger import ColoredFormatter
+
+# Apply colored formatter cho root logger
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(ColoredFormatter(
+    fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    use_colors=True
+))
+logging.root.handlers = []
+logging.root.addHandler(handler)
+logging.root.setLevel(logging.INFO)
+
 from app.application import Application
 
 def main():

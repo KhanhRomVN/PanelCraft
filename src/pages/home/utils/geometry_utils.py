@@ -240,7 +240,5 @@ def sort_segments_manga_order(segments: List[dict]) -> List[dict]:
             seg['id'] = new_id
             sorted_segments.append(seg)
             new_id += 1
-    
-    logger.info(f"Sorted {len(sorted_segments)} segments into {len(rows)} rows")
-    
+        
     return sorted_segments
