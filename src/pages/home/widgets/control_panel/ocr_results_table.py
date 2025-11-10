@@ -402,10 +402,23 @@ class OCRResultsTable(QWidget):
 
             # Set font
             current_font = row_data.get("_font_family")
+            self.logger.info(f"[OCR_TABLE] Setting font for row {row_index}: current_font={current_font}")
+            
             if current_font:
                 self.detail_font_combo.setCurrentValue(current_font)
+                self.logger.info(f"[OCR_TABLE]   - Set font to: {current_font}")
             else:
-                self.detail_font_combo.setCurrentValue("default")
+                # Nếu không có font được set, dùng default_font từ FontManager
+                from core.font_manager import FontManager
+                font_manager = FontManager()
+                default_font = font_manager.get_default_font()
+                
+                self.logger.info(f"[OCR_TABLE]   - No font set, using default: {default_font}")
+                
+                if default_font:
+                    self.detail_font_combo.setCurrentValue(default_font)
+                else:
+                    self.detail_font_combo.setCurrentValue(None)  # "Default (System)"
 
             # Unblock signals SAU KHI setCurrentValue
             self.detail_font_combo.blockSignals(False)
@@ -450,6 +463,10 @@ class OCRResultsTable(QWidget):
             visible_fonts = font_manager.get_visible_fonts()
             default_font = font_manager.get_default_font()
             
+            self.logger.info(f"[OCR_TABLE] Loading fonts to detail combo:")
+            self.logger.info(f"[OCR_TABLE]   - Visible fonts: {visible_fonts}")
+            self.logger.info(f"[OCR_TABLE]   - Default font: {default_font}")
+            
             # CRITICAL: Đảm bảo block signals trước khi clear
             self.detail_font_combo.combobox.blockSignals(True)
             if hasattr(self.detail_font_combo.combobox, 'lineEdit'):
@@ -461,10 +478,20 @@ class OCRResultsTable(QWidget):
             self.detail_font_combo.combobox.clear()
             self.detail_font_combo._options.clear()
             
-            # Build options từ đầu
-            font_options = [{"value": "default", "label": "Default"}]
+            # Build options: CHỈ thêm option "Default (System)" nếu default_font là None
+            font_options = []
+            
+            if default_font is None:
+                font_options.append({"value": None, "label": "Default (System)"})
+                self.logger.info(f"[OCR_TABLE]   - Added 'Default (System)' option (default_font is None)")
+            
+            # Thêm tất cả visible fonts
             for font in visible_fonts:
                 font_options.append({"value": font, "label": font})
+            
+            self.logger.info(f"[OCR_TABLE]   - Total font options: {len(font_options)}")
+            for opt in font_options:
+                self.logger.info(f"[OCR_TABLE]     • {opt['label']} (value={opt['value']})")
                         
             # Set options trực tiếp vào _options (KHÔNG dùng setOptions())
             self.detail_font_combo._options = font_options
@@ -482,8 +509,14 @@ class OCRResultsTable(QWidget):
                 index = self.detail_font_combo.combobox.findData(default_font)
                 if index >= 0:
                     self.detail_font_combo.combobox.setCurrentIndex(index)
+                    self.logger.info(f"[OCR_TABLE]   - Set current font to: {default_font} (index={index})")
             else:
-                self.detail_font_combo.combobox.setCurrentIndex(0)  # "Default"
+                # Nếu không có default_font hoặc không trong visible_fonts
+                # Set index 0 (có thể là "Default (System)" hoặc font đầu tiên)
+                self.detail_font_combo.combobox.setCurrentIndex(0)
+                first_option = font_options[0] if font_options else None
+                first_label = first_option['label'] if first_option else "None"
+                self.logger.info(f"[OCR_TABLE]   - Set current font to first option: {first_label} (index=0)")
             
             # CRITICAL: Unblock signals sau khi xong
             self.detail_font_combo.combobox.blockSignals(False)
@@ -653,14 +686,27 @@ class OCRResultsTable(QWidget):
         valid_texts = [text for text in texts if text.strip()]
         table_data = []
                 
+        # Get default font name từ FontManager
+        from core.font_manager import FontManager
+        font_manager = FontManager()
+        default_font = font_manager.get_default_font()
+        
+        # Xác định display text cho default font
+        if default_font:
+            default_font_display = default_font
+        else:
+            default_font_display = "Default (System)"
+        
+        self.logger.info(f"[OCR_TABLE] Creating OCR table data with default font display: {default_font_display}")
+        
         for i, text in enumerate(valid_texts):
             # Truncate text if too long
             original_short = text if len(text) <= OCR_DISPLAY_MAX_LENGTH else text[:OCR_DISPLAY_MAX_LENGTH - 3] + "..."
             
             table_data.append({
                 "STT": str(i + 1),
-                "Character": "-- Select --",
-                "Font": "Default",
+                "Character": "",  # TRỐNG thay vì "-- Select --"
+                "Font": default_font_display,  # Hiển thị tên font mặc định thật
                 "Original Text": original_short,
                 "Translation": "",
                 "_full_original": text,
@@ -755,9 +801,11 @@ class OCRResultsTable(QWidget):
         if not self.ocr_data:
             return
         
+        self.logger.info(f"[OCR_TABLE] Clearing all character assignments")
+        
         for row in self.ocr_data:
             row['_character_id'] = None
-            row['Character'] = '-- Select --'
+            row['Character'] = ''  # TRỐNG thay vì '-- Select --'
         
         # Refresh table display
         self.ocr_table.setData(self.ocr_data)
