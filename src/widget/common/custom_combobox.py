@@ -266,9 +266,21 @@ class CustomCombobox(QWidget):
     # Public methods
     def setOptions(self, options: List[Dict[str, str]]):
         """Set new options"""
-        self._options = options
-        self.filtered_options = options.copy()
-        self.populate_options()
+        # Block ALL signals to prevent recursion
+        was_blocked = self.signalsBlocked()
+        combobox_was_blocked = self.combobox.signalsBlocked()
+        
+        self.blockSignals(True)
+        self.combobox.blockSignals(True)
+        
+        try:
+            self._options = options
+            self.filtered_options = options.copy()
+            self.populate_options()
+        finally:
+            # Restore original signal state
+            self.blockSignals(was_blocked)
+            self.combobox.blockSignals(combobox_was_blocked)
     
     def addOption(self, value: str, label: str):
         """Add a new option"""

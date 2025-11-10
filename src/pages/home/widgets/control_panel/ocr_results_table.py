@@ -270,10 +270,10 @@ class OCRResultsTable(QWidget):
     
     def setup_table_connections(self):
         """Setup connections cho table"""
-        # CRITICAL: Disconnect trước khi connect để tránh multiple connections
+        # CRITICAL: Disconnect ALL existing connections trước khi connect
         try:
             self.ocr_table.rowClicked.disconnect()
-        except:
+        except (TypeError, RuntimeError):
             pass
         
         # Connect row click để hiển thị detail view
@@ -367,12 +367,19 @@ class OCRResultsTable(QWidget):
             # Store current row
             self.current_detail_row = row_index
 
-            # CRITICAL: Disconnect combo signals trước khi load
-            self._disconnect_combo_signals()
+            # CRITICAL: Block ALL signals trước khi load (bao gồm cả lineEdit)
+            self.detail_font_combo.blockSignals(True)
+            self.detail_character_combo.blockSignals(True)
+            
+            if hasattr(self.detail_font_combo, 'combobox'):
+                self.detail_font_combo.combobox.blockSignals(True)
+                if hasattr(self.detail_font_combo.combobox, 'lineEdit'):
+                    line_edit = self.detail_font_combo.combobox.lineEdit()
+                    if line_edit:
+                        line_edit.blockSignals(True)
 
             # Load fonts và characters vào ComboBox
             self._load_fonts_to_detail_combo()
-            
             self._load_characters_to_detail_combo()
 
             # Load data vào detail view
@@ -381,21 +388,17 @@ class OCRResultsTable(QWidget):
 
             # Set character
             char_id = row_data.get("_character_id")
-            self.detail_character_combo.blockSignals(True)
             if char_id:
                 self.detail_character_combo.setCurrentValue(char_id)
             else:
                 self.detail_character_combo.setCurrentValue(None)
-            self.detail_character_combo.blockSignals(False)
 
             # Set font
             current_font = row_data.get("_font_family")
-            self.detail_font_combo.blockSignals(True)
             if current_font:
                 self.detail_font_combo.setCurrentValue(current_font)
             else:
                 self.detail_font_combo.setCurrentValue("default")
-            self.detail_font_combo.blockSignals(False)
 
             # Set original text
             original_text = row_data.get("_full_original", "")
@@ -405,67 +408,40 @@ class OCRResultsTable(QWidget):
             translation_text = row_data.get("_full_translation", "")
             self.detail_translation_input.setText(translation_text)
             
-            # CRITICAL: Reconnect combo signals sau khi setup xong
-            self._reconnect_combo_signals()
-            
         except Exception as e:
             self.logger.error(f"[OCR_TABLE] ✗ ERROR in on_row_clicked: {e}")
             import traceback
             self.logger.error(f"[OCR_TABLE] Traceback:\n{traceback.format_exc()}")
         finally:
+            # CRITICAL: Unblock ALL signals (bao gồm cả lineEdit)
+            self.detail_font_combo.blockSignals(False)
+            self.detail_character_combo.blockSignals(False)
+            
+            if hasattr(self.detail_font_combo, 'combobox'):
+                self.detail_font_combo.combobox.blockSignals(False)
+                if hasattr(self.detail_font_combo.combobox, 'lineEdit'):
+                    line_edit = self.detail_font_combo.combobox.lineEdit()
+                    if line_edit:
+                        line_edit.blockSignals(False)
+            
+            if hasattr(self.detail_character_combo, 'combobox'):
+                self.detail_character_combo.combobox.blockSignals(False)
+                if hasattr(self.detail_character_combo.combobox, 'lineEdit'):
+                    line_edit = self.detail_character_combo.combobox.lineEdit()
+                    if line_edit:
+                        line_edit.blockSignals(False)
+            
             # Đảm bảo luôn reset flag
             self._processing_click = False
     
-    def _disconnect_combo_signals(self):
-        """Disconnect tất cả signals từ combo boxes"""
-        try:
-            # Disconnect font combo
-            try:
-                self.detail_font_combo.valueChanged.disconnect()
-            except:
-                pass
-            
-            # Disconnect character combo
-            try:
-                self.detail_character_combo.valueChanged.disconnect()
-            except:
-                pass
-                
-        except Exception as e:
-            self.logger.error(f"[OCR_TABLE] Error disconnecting combo signals: {e}")
-    
-    def _reconnect_combo_signals(self):
-        """Reconnect combo box signals sau khi setup"""
-        try:
-            pass
-        except Exception as e:
-            self.logger.error(f"[OCR_TABLE] Error reconnecting combo signals: {e}")
-    
     def _load_fonts_to_detail_combo(self):
-        """Load fonts vào detail view CustomCombobox - FIXED: Ngăn recursion hoàn toàn"""
+        """Load fonts vào detail view CustomCombobox"""
         from core.font_manager import FontManager
         
         try:
             font_manager = FontManager()
             visible_fonts = font_manager.get_visible_fonts()
             default_font = font_manager.get_default_font()
-            
-            try:
-                self.detail_font_combo.valueChanged.disconnect()
-            except:
-                pass
-            try:
-                self.detail_font_combo.currentTextChanged.disconnect()
-            except:
-                pass
-            
-            # Block signals ở tất cả levels
-            self.detail_font_combo.blockSignals(True)
-            self.detail_font_combo.combobox.blockSignals(True)
-            if hasattr(self.detail_font_combo.combobox, 'lineEdit'):
-                line_edit = self.detail_font_combo.combobox.lineEdit()
-                if line_edit:
-                    line_edit.blockSignals(True)
             
             # Clear existing options trước khi add mới
             self.detail_font_combo.combobox.clear()
@@ -495,20 +471,10 @@ class OCRResultsTable(QWidget):
             else:
                 self.detail_font_combo.combobox.setCurrentIndex(0)  # "Default"
             
-            current_value = self.detail_font_combo.combobox.currentData()
-            
         except Exception as e:
             self.logger.error(f"[OCR_TABLE] ✗ ERROR in _load_fonts_to_detail_combo: {e}")
             import traceback
             self.logger.error(f"[OCR_TABLE] Traceback:\n{traceback.format_exc()}")
-        finally:
-            # Unblock signals
-            self.detail_font_combo.blockSignals(False)
-            self.detail_font_combo.combobox.blockSignals(False)
-            if hasattr(self.detail_font_combo.combobox, 'lineEdit'):
-                line_edit = self.detail_font_combo.combobox.lineEdit()
-                if line_edit:
-                    line_edit.blockSignals(False)
                     
     def _load_characters_to_detail_combo(self):
         """Load characters vào detail view CustomCombobox"""
@@ -518,16 +484,6 @@ class OCRResultsTable(QWidget):
             project_manager = ProjectManager()
             characters = project_manager.get_characters()
             
-            # CRITICAL: TẮT HOÀN TOÀN combo để tránh recursion
-            self.detail_character_combo.setEnabled(False)
-            self.detail_character_combo.blockSignals(True)
-            if hasattr(self.detail_character_combo, 'combobox'):
-                self.detail_character_combo.combobox.blockSignals(True)
-                if hasattr(self.detail_character_combo.combobox, 'lineEdit'):
-                    line_edit = self.detail_character_combo.combobox.lineEdit()
-                    if line_edit:
-                        line_edit.blockSignals(True)
-            
             # Tạo options
             char_options = [{"value": None, "label": "-- Chọn nhân vật --"}]
             for char in characters:
@@ -536,27 +492,13 @@ class OCRResultsTable(QWidget):
                     "label": char['name']
                 })
                         
-            # Set options
-            try:
-                self.detail_character_combo.setOptions(char_options)
-            except RecursionError as re:
-                self.logger.error(f"[OCR_TABLE]   - RecursionError in setOptions(): {re}")
-                raise
+            # Set options (signals đã được block ở parent method)
+            self.detail_character_combo.setOptions(char_options)
             
         except Exception as e:
             self.logger.error(f"[OCR_TABLE] ✗ ERROR in _load_characters_to_detail_combo: {e}")
             import traceback
             self.logger.error(f"[OCR_TABLE] Traceback:\n{traceback.format_exc()}")
-        finally:
-            # CRITICAL: BẬT LẠI combo và unblock signals
-            self.detail_character_combo.blockSignals(False)
-            if hasattr(self.detail_character_combo, 'combobox'):
-                self.detail_character_combo.combobox.blockSignals(False)
-                if hasattr(self.detail_character_combo.combobox, 'lineEdit'):
-                    line_edit = self.detail_character_combo.combobox.lineEdit()
-                    if line_edit:
-                        line_edit.blockSignals(False)
-            self.detail_character_combo.setEnabled(True)
                 
     def on_close_detail(self):
         """Đóng detail view"""
