@@ -79,7 +79,15 @@ class CustomInput(QWidget):
         if self._multiline:
             self.input_field = QTextEdit()
             self.input_field.setPlaceholderText(self._placeholder)
-            self.input_field.setMaximumHeight(self._rows * 24)
+            
+            # Tính height chính xác hơn dựa trên font metrics
+            font_metrics = self.input_field.fontMetrics()
+            line_height = font_metrics.lineSpacing()
+            padding = 16  # Top + bottom padding
+            height = self._rows * line_height + padding
+            
+            self.input_field.setMaximumHeight(height)
+            self.input_field.setMinimumHeight(height)
         else:
             self.input_field = QLineEdit()
             self.input_field.setPlaceholderText(self._placeholder)
@@ -122,7 +130,7 @@ class CustomInput(QWidget):
             "sm": {
                 "padding": "8px 12px",
                 "font_size": "14px",
-                "height": "32px"
+                "height": "26px"
             },
             "md": {
                 "padding": "12px 16px",

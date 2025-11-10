@@ -7,6 +7,7 @@ import logging
 from widget.common.custom_button import CustomButton
 from widget.common.custom_table import CustomTable
 from widget.common.custom_input import CustomInput
+from widget.common.auto_resize_text_edit import AutoResizeTextEdit
 from core.project_manager import ProjectManager
 from ...constants.constants import OCR_DISPLAY_MAX_LENGTH
 
@@ -141,7 +142,6 @@ class OCRResultsTable(QWidget):
             multiline=True,
             rows=3
         )
-        self.original_input.input_field.setReadOnly(False)
         edit_layout.addWidget(self.original_input)
         
         # Translation input
@@ -222,24 +222,70 @@ class OCRResultsTable(QWidget):
         )
         detail_layout.addWidget(self.detail_font_combo)
         
-        # Original text field (read-only, multiline)
-        self.detail_original_input = CustomInput(
-            label="Văn bản gốc",
-            variant="filled",
-            multiline=True,
-            rows=4
+        # ========== THÊM: Connect valueChanged signals ==========
+        self.detail_character_combo.valueChanged[str].connect(self.on_detail_character_changed)
+        self.detail_font_combo.valueChanged[str].connect(self.on_detail_font_changed)
+        
+        # Original text field (editable, auto-resize)
+        original_label = QLabel("Original Text")
+        original_label.setStyleSheet("""
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        """)
+        detail_layout.addWidget(original_label)
+        
+        self.detail_original_input = AutoResizeTextEdit(
+            placeholder="Original text from OCR...",
+            min_lines=1,
+            max_lines=15
         )
-        self.detail_original_input.input_field.setReadOnly(True)
+        self.detail_original_input.setStyleSheet("""
+            QTextEdit {
+                background-color: var(--sidebar-background);
+                border: 1px solid transparent;
+                border-radius: 6px;
+                color: var(--text-primary);
+                padding: 12px 16px;
+                font-size: 16px;
+            }
+            QTextEdit:focus {
+                background-color: var(--input-background);
+                border-color: var(--primary);
+            }
+        """)
         detail_layout.addWidget(self.detail_original_input)
         
-        # Translation field (editable, multiline)
-        self.detail_translation_input = CustomInput(
-            label="Bản dịch",
-            placeholder="Nhập bản dịch tại đây...",
-            variant="filled",
-            multiline=True,
-            rows=4
+        # Translation field (editable, auto-resize)
+        translation_label = QLabel("Translation")
+        translation_label.setStyleSheet("""
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        """)
+        detail_layout.addWidget(translation_label)
+        
+        self.detail_translation_input = AutoResizeTextEdit(
+            placeholder="Enter translation here...",
+            min_lines=1,
+            max_lines=15
         )
+        self.detail_translation_input.setStyleSheet("""
+            QTextEdit {
+                background-color: var(--sidebar-background);
+                border: 1px solid transparent;
+                border-radius: 6px;
+                color: var(--text-primary);
+                padding: 12px 16px;
+                font-size: 16px;
+            }
+            QTextEdit:focus {
+                background-color: var(--input-background);
+                border-color: var(--primary);
+            }
+        """)
         detail_layout.addWidget(self.detail_translation_input)
         
         # Action buttons
@@ -432,11 +478,11 @@ class OCRResultsTable(QWidget):
 
             # Set original text
             original_text = row_data.get("_full_original", "")
-            self.detail_original_input.setText(original_text)
+            self.detail_original_input.setPlainText(original_text)
             
             # Set translation text
             translation_text = row_data.get("_full_translation", "")
-            self.detail_translation_input.setText(translation_text)
+            self.detail_translation_input.setPlainText(translation_text)
             
             self.logger.info(f"[OCR_TABLE] ========== on_row_clicked COMPLETED ==========")
             
@@ -607,33 +653,11 @@ class OCRResultsTable(QWidget):
         row = self.current_detail_row
         
         # Get text from detail inputs
-        full_translation = self.detail_translation_input.text()
+        full_translation = self.detail_translation_input.toPlainText()
         
-        # Get selected font and character
-        selected_font_value = self.detail_font_combo.currentValue()
-        selected_char_value = self.detail_character_combo.currentValue()
-        
-        # Update data
+        # Update data (character và font đã được update tự động qua on_detail_*_changed)
         if row < len(self.ocr_data):
             self.ocr_data[row]["_full_translation"] = full_translation
-            
-            # Update font
-            if selected_font_value and selected_font_value != "default":
-                self.ocr_data[row]["_font_family"] = selected_font_value
-                self.ocr_data[row]["Font"] = selected_font_value  # Display in table
-            else:
-                self.ocr_data[row]["_font_family"] = None
-                self.ocr_data[row]["Font"] = "Default"
-            
-            # Update character
-            if selected_char_value:
-                self.ocr_data[row]["_character_id"] = selected_char_value
-                # Get character name from combo
-                char_text = self.detail_character_combo.combobox.currentText()
-                self.ocr_data[row]["Character"] = char_text
-            else:
-                self.ocr_data[row]["_character_id"] = None
-                self.ocr_data[row]["Character"] = "-- Select --"
             
             # Update display (truncated)
             max_len = OCR_DISPLAY_MAX_LENGTH
@@ -643,11 +667,67 @@ class OCRResultsTable(QWidget):
             
             # Refresh table
             self.ocr_table.setData(self.ocr_data)
+            
+            self.logger.info(f"[OCR_TABLE] Saved detail for row {row}")
                         
             # Đóng detail view sau khi lưu
             self.detail_container.hide()
             self.current_detail_row = None
+            
+    def on_detail_character_changed(self, value: str):
+        """Handle khi user thay đổi character trong detail view"""
+        if self.current_detail_row is None:
+            return
+        
+        row = self.current_detail_row
+        
+        if row < len(self.ocr_data):
+            # Update character ID
+            self.ocr_data[row]["_character_id"] = value
+            
+            # Update display text
+            if value:
+                # Get character name from combo
+                char_text = self.detail_character_combo.combobox.currentText()
+                self.ocr_data[row]["Character"] = char_text
+                self.logger.info(f"[OCR_TABLE] Updated character for row {row}: {char_text} (id={value})")
+            else:
+                self.ocr_data[row]["Character"] = ""
+                self.logger.info(f"[OCR_TABLE] Cleared character for row {row}")
+            
+            # Refresh table display (giữ nguyên row selection)
+            self.ocr_table.setData(self.ocr_data)
     
+    def on_detail_font_changed(self, value: str):
+        """Handle khi user thay đổi font trong detail view"""
+        if self.current_detail_row is None:
+            return
+        
+        row = self.current_detail_row
+        
+        if row < len(self.ocr_data):
+            # Update font family
+            if value and value != "default":
+                self.ocr_data[row]["_font_family"] = value
+                self.ocr_data[row]["Font"] = value
+                self.logger.info(f"[OCR_TABLE] Updated font for row {row}: {value}")
+            else:
+                self.ocr_data[row]["_font_family"] = None
+                # Get default font display name
+                from core.font_manager import FontManager
+                font_manager = FontManager()
+                default_font = font_manager.get_default_font()
+                
+                if default_font:
+                    self.ocr_data[row]["Font"] = default_font
+                else:
+                    self.ocr_data[row]["Font"] = "Default (System)"
+                
+                self.logger.info(f"[OCR_TABLE] Reset font for row {row} to default")
+            
+            # Refresh table display
+            self.ocr_table.setData(self.ocr_data)
+        
     def on_ocr_result(self, index: int, texts: list):
         """Handle OCR results"""
         self.ocr_results[index] = texts
@@ -845,7 +925,7 @@ class OCRResultsTable(QWidget):
         
         # Update detail view nếu đang mở
         if self.detail_container.isVisible():
-            self.detail_original_input.setText(text)
+            self.detail_original_input.setPlainText(text)
                 
     def refresh_font_comboboxes(self):
         """Refresh font comboboxes sau khi thay đổi font settings"""

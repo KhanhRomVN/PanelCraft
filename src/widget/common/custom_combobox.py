@@ -1,9 +1,22 @@
 from PySide6.QtWidgets import (QComboBox, QVBoxLayout, QHBoxLayout, QLabel, 
                               QWidget, QListWidget, QLineEdit, QListWidgetItem,
                               QAbstractItemView, QPushButton, QScrollArea)
-from PySide6.QtCore import Qt, Signal, Property, QTimer, QSize
+from PySide6.QtCore import Qt, Signal, Property, QTimer, QSize, QEvent
 from PySide6.QtGui import QIcon, QFont
 from typing import List, Dict, Optional, Tuple
+
+class ScrollBlockComboBox(QComboBox):
+    """QComboBox với chức năng chặn scroll thay đổi giá trị"""
+    
+    def wheelEvent(self, event):
+        """Override wheelEvent để chặn scroll khi combobox không focus"""
+        # Chỉ cho phép scroll khi dropdown đang mở
+        if not self.view().isVisible():
+            event.ignore()
+            return
+        
+        # Nếu dropdown đang mở, cho phép scroll bình thường
+        super().wheelEvent(event)
 
 class CustomCombobox(QWidget):
     """Custom combobox with search, multi-select, and creatable options"""
@@ -61,15 +74,20 @@ class CustomCombobox(QWidget):
         combobox_layout.setContentsMargins(0, 0, 0, 0)
         
         # Combobox
-        self.combobox = QComboBox()
+        self.combobox = ScrollBlockComboBox()
         self.combobox.setEditable(self._searchable)
         
         # Set placeholder if searchable
         if self._searchable and self.combobox.lineEdit():
             self.combobox.lineEdit().setPlaceholderText(self._placeholder)
+            # Chặn nhập text bằng bàn phím
+            self.combobox.lineEdit().setReadOnly(True)
         
         # Populate options
         self.populate_options()
+        
+        # Connect dropdown state change để update icon
+        self.combobox.view().installEventFilter(self)
         
         combobox_layout.addWidget(self.combobox)
         
@@ -99,9 +117,9 @@ class CustomCombobox(QWidget):
         """Apply styles based on size"""
         size_styles = {
             "sm": {
-                "padding": "8px 12px",
+                "padding": "4px 8px",
                 "font_size": "14px",
-                "height": "32px"
+                "height": "30px"
             },
             "md": {
                 "padding": "12px 16px",
@@ -137,12 +155,21 @@ class CustomCombobox(QWidget):
             QComboBox::drop-down {{
                 border: none;
                 width: 30px;
+                subcontrol-origin: padding;
+                subcontrol-position: center right;
+                padding-right: 8px;
             }}
             QComboBox::down-arrow {{
                 image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
+                width: 0;
+                height: 0;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
                 border-top: 6px solid var(--text-primary);
+            }}
+            QComboBox::down-arrow:on {{
+                border-top: none;
+                border-bottom: 6px solid var(--text-primary);
             }}
             QComboBox QAbstractItemView {{
                 background-color: var(--dropdown-background);
@@ -151,6 +178,10 @@ class CustomCombobox(QWidget):
                 selection-background-color: var(--dropdown-item-hover);
                 color: var(--text-primary);
                 outline: none;
+            }}
+            QComboBox QAbstractItemView::item {{
+                min-height: 24px;
+                padding: 4px 8px;
             }}
         """
         
@@ -167,6 +198,25 @@ class CustomCombobox(QWidget):
         # Connect search if searchable
         if self._searchable and self.combobox.lineEdit():
             self.combobox.lineEdit().textChanged.connect(self.on_search_changed)
+    
+    def eventFilter(self, obj, event):
+        """Filter events để cập nhật icon khi dropdown mở/đóng"""
+        if obj == self.combobox.view():
+            if event.type() == QEvent.Show:
+                # Dropdown đang mở
+                self.is_dropdown_open = True
+                self.update_arrow_icon()
+            elif event.type() == QEvent.Hide:
+                # Dropdown đang đóng
+                self.is_dropdown_open = False
+                self.update_arrow_icon()
+        
+        return super().eventFilter(obj, event)
+    
+    def update_arrow_icon(self):
+        """Cập nhật arrow icon dựa trên trạng thái dropdown"""
+        # Force repaint để CSS :on state có hiệu lực
+        self.combobox.update()
     
     def on_index_changed(self, index):
         """Handle selection change"""
