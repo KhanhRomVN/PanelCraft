@@ -1,3 +1,1 @@
-# PanelCraft
-
-tree -I "venv"
+tree -I 'node_modules/|_internal|dist'

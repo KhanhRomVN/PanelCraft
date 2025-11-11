@@ -1,0 +1,67 @@
+{
+  "[typescript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[javascript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[json]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "search.exclude": {
+    // Thư mục build / output
+    "**/dist": true,
+    "**/out": true,
+    "**/build": true,
+    "**/release": true,
+    "**/tmp": true,
+
+    // Node & cache
+    "**/node_modules": true,
+    "**/.cache": true,
+    "**/.parcel-cache": true,
+    "**/.vite": true,
+    "**/.webpack": true,
+
+    // Config và meta
+    "**/.git": true,
+    "**/.idea": true,
+    "**/.vscode": true,
+
+    // Log, export và file nặng
+    "**/*.log": true,
+    "**/*.tmp": true,
+    "**/*.bak": true,
+    "**/*.dmp": true,
+
+    // Package hoặc binary
+    "**/*.asar": true,
+    "**/*.zip": true,
+    "**/*.tar": true,
+    "**/*.gz": true,
+    "**/*.7z": true,
+    "**/*.exe": true,
+    "**/*.dll": true,
+    "**/*.so": true,
+    "**/*.bin": true,
+
+    // Media hoặc tài nguyên lớn
+    "**/*.mp4": true,
+    "**/*.mkv": true,
+    "**/*.avi": true,
+    "**/*.mov": true,
+    "**/*.mp3": true,
+    "**/*.wav": true,
+    "**/*.png": true,
+    "**/*.jpg": true,
+    "**/*.jpeg": true,
+    "**/*.gif": true,
+    "**/*.svg": true,
+    "**/*.ico": true
+  },
+
+  "search.maxFileSize": 20000,
+  "search.useIgnoreFiles": true,
+  "search.useGlobalIgnoreFiles": true,
+  "search.useRipgrep": true
+}

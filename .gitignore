@@ -1,1 +1,12 @@
+node_modules
+dist
+out
+.DS_Store
+.eslintcache
+*.log*
 venv
+temp
+build
+.env
+_internal
+*_internal
