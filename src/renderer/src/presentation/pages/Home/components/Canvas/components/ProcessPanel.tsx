@@ -17,6 +17,18 @@ interface ProcessPanelProps {
   syncScrollTop?: number
 }
 
+type DragMode =
+  | 'move'
+  | 'resize-tl'
+  | 'resize-tr'
+  | 'resize-bl'
+  | 'resize-br'
+  | 'resize-t'
+  | 'resize-b'
+  | 'resize-l'
+  | 'resize-r'
+  | null
+
 const ProcessPanel: FC<ProcessPanelProps> = ({ onScrollSync, syncScrollTop }) => {
   const [currentImage, setCurrentImage] = useState<string | null>(null)
   const [rectangles, setRectangles] = useState<Rectangle[]>([])
@@ -25,9 +37,29 @@ const ProcessPanel: FC<ProcessPanelProps> = ({ onScrollSync, syncScrollTop }) =>
   const imageRef = useRef<HTMLImageElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const isScrollingSyncRef = useRef(false)
+  const rectanglesRef = useRef<Rectangle[]>([])
+  const animationFrameRef = useRef<number | null>(null)
+  const resizeObserverRef = useRef<ResizeObserver | null>(null)
+  const dragModeRef = useRef<DragMode>(null)
+
+  // States cho drag & resize
+  const [selectedRectIndex, setSelectedRectIndex] = useState<number | null>(null)
+  const [dragMode, setDragMode] = useState<DragMode>(null)
+  const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null)
+  const [originalRect, setOriginalRect] = useState<Rectangle | null>(null)
 
   const { processedResults, isProcessing, currentImageIndex, setCurrentImageIndex } =
     useProcessing()
+
+  // Sync rectanglesRef với rectangles state
+  useEffect(() => {
+    rectanglesRef.current = rectangles
+  }, [rectangles])
+
+  // Sync dragModeRef với dragMode state
+  useEffect(() => {
+    dragModeRef.current = dragMode
+  }, [dragMode])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -61,8 +93,6 @@ const ProcessPanel: FC<ProcessPanelProps> = ({ onScrollSync, syncScrollTop }) =>
             const absoluteUrl = `${API_CONFIG.BASE_URL}${imageUrl}`
             const dataUrl = await window.electronAPI.fetchImageFromBackend(absoluteUrl)
             setCurrentImage(dataUrl)
-
-            // THÊM: Load rectangles metadata
             setRectangles(result.rectangles || [])
           } catch (error) {
             console.error('Failed to load processed image:', error)
@@ -82,45 +112,68 @@ const ProcessPanel: FC<ProcessPanelProps> = ({ onScrollSync, syncScrollTop }) =>
     loadProcessedImage()
   }, [currentImageIndex, processedResults])
 
-  // THÊM: Draw rectangles overlay
+  // Function để draw rectangles (dùng ref thay vì state)
+  const drawRectangles = () => {
+    const image = imageRef.current
+    const canvas = canvasRef.current
+    if (!image || !canvas || rectanglesRef.current.length === 0) return
+
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    // CHỈ set canvas size khi thực sự thay đổi (tránh trigger ResizeObserver)
+    const targetWidth = Math.round(image.clientWidth)
+    const targetHeight = Math.round(image.clientHeight)
+
+    if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+      canvas.width = targetWidth
+      canvas.height = targetHeight
+    }
+
+    const scaleX = canvas.width / image.naturalWidth
+    const scaleY = canvas.height / image.naturalHeight
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+    rectanglesRef.current.forEach((rect, index) => {
+      const x = rect.x * scaleX
+      const y = rect.y * scaleY
+      const w = rect.w * scaleX
+      const h = rect.h * scaleY
+
+      const isSelected = selectedRectIndex === index
+
+      // Draw rectangle
+      ctx.strokeStyle = isSelected ? '#0000FF' : '#FF0000'
+      ctx.lineWidth = isSelected ? 3 : 2
+      ctx.strokeRect(x, y, w, h)
+
+      // Draw number label
+      ctx.fillStyle = isSelected ? '#0000FF' : '#FF0000'
+      ctx.font = 'bold 14px sans-serif'
+      ctx.fillText(`${index + 1}`, x + w + 5, y - 5)
+
+      // Draw resize handles nếu selected
+      if (isSelected) {
+        const handleSize = 8
+        ctx.fillStyle = '#0000FF'
+
+        // 4 góc
+        ctx.fillRect(x - handleSize / 2, y - handleSize / 2, handleSize, handleSize)
+        ctx.fillRect(x + w - handleSize / 2, y - handleSize / 2, handleSize, handleSize)
+        ctx.fillRect(x - handleSize / 2, y + h - handleSize / 2, handleSize, handleSize)
+        ctx.fillRect(x + w - handleSize / 2, y + h - handleSize / 2, handleSize, handleSize)
+      }
+    })
+  }
+
+  // Setup ResizeObserver một lần
   useEffect(() => {
-    if (!currentImage || rectangles.length === 0) return
+    if (!currentImage) return
 
     const image = imageRef.current
     const canvas = canvasRef.current
     if (!image || !canvas) return
-
-    const drawRectangles = () => {
-      const ctx = canvas.getContext('2d')
-      if (!ctx) return
-
-      // Set canvas size to match displayed image
-      canvas.width = image.clientWidth
-      canvas.height = image.clientHeight
-
-      const scaleX = canvas.width / image.naturalWidth
-      const scaleY = canvas.height / image.naturalHeight
-
-      ctx.clearRect(0, 0, canvas.width, canvas.height)
-
-      // Draw red rectangles
-      ctx.strokeStyle = '#FF0000'
-      ctx.lineWidth = 2
-
-      rectangles.forEach((rect, index) => {
-        const x = rect.x * scaleX
-        const y = rect.y * scaleY
-        const w = rect.w * scaleX
-        const h = rect.h * scaleY
-
-        ctx.strokeRect(x, y, w, h)
-
-        // Draw number label
-        ctx.fillStyle = '#FF0000'
-        ctx.font = 'bold 14px sans-serif'
-        ctx.fillText(`${index + 1}`, x + w + 5, y - 5)
-      })
-    }
 
     if (image.complete) {
       drawRectangles()
@@ -128,7 +181,264 @@ const ProcessPanel: FC<ProcessPanelProps> = ({ onScrollSync, syncScrollTop }) =>
       image.addEventListener('load', drawRectangles)
       return () => image.removeEventListener('load', drawRectangles)
     }
-  }, [currentImage, rectangles])
+
+    // Setup ResizeObserver
+    if (!resizeObserverRef.current) {
+      resizeObserverRef.current = new ResizeObserver(() => {
+        // CHỈ redraw khi KHÔNG đang drag (dùng ref để có giá trị realtime)
+        if (!dragModeRef.current) {
+          drawRectangles()
+        }
+      })
+    }
+
+    resizeObserverRef.current.observe(image)
+
+    return () => {
+      if (resizeObserverRef.current) {
+        resizeObserverRef.current.disconnect()
+      }
+      image.removeEventListener('load', drawRectangles)
+    }
+  }, [currentImage, selectedRectIndex])
+
+  // Cleanup animation frame khi unmount
+  useEffect(() => {
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current)
+      }
+    }
+  }, [])
+
+  // Helper: Get mouse position relative to canvas
+  const getMousePos = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current
+    if (!canvas) return null
+
+    const rect = canvas.getBoundingClientRect()
+    return {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top
+    }
+  }
+
+  // Helper: Check if point is in rectangle
+  const isPointInRect = (
+    px: number,
+    py: number,
+    rect: Rectangle,
+    scaleX: number,
+    scaleY: number
+  ) => {
+    const x = rect.x * scaleX
+    const y = rect.y * scaleY
+    const w = rect.w * scaleX
+    const h = rect.h * scaleY
+
+    return px >= x && px <= x + w && py >= y && py <= y + h
+  }
+
+  // Helper: Detect resize handle
+  const detectResizeHandle = (
+    px: number,
+    py: number,
+    rect: Rectangle,
+    scaleX: number,
+    scaleY: number
+  ): DragMode => {
+    const x = rect.x * scaleX
+    const y = rect.y * scaleY
+    const w = rect.w * scaleX
+    const h = rect.h * scaleY
+    const handleSize = 8
+
+    // 4 góc
+    if (Math.abs(px - x) < handleSize && Math.abs(py - y) < handleSize) return 'resize-tl'
+    if (Math.abs(px - (x + w)) < handleSize && Math.abs(py - y) < handleSize) return 'resize-tr'
+    if (Math.abs(px - x) < handleSize && Math.abs(py - (y + h)) < handleSize) return 'resize-bl'
+    if (Math.abs(px - (x + w)) < handleSize && Math.abs(py - (y + h)) < handleSize)
+      return 'resize-br'
+
+    // 4 cạnh
+    if (Math.abs(px - (x + w / 2)) < handleSize && Math.abs(py - y) < handleSize) return 'resize-t'
+    if (Math.abs(px - (x + w / 2)) < handleSize && Math.abs(py - (y + h)) < handleSize)
+      return 'resize-b'
+    if (Math.abs(px - x) < handleSize && Math.abs(py - (y + h / 2)) < handleSize) return 'resize-l'
+    if (Math.abs(px - (x + w)) < handleSize && Math.abs(py - (y + h / 2)) < handleSize)
+      return 'resize-r'
+
+    return null
+  }
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const pos = getMousePos(e)
+    const image = imageRef.current
+    if (!pos || !image) return
+
+    const scaleX = image.clientWidth / image.naturalWidth
+    const scaleY = image.clientHeight / image.naturalHeight
+
+    // Check if clicking on selected rectangle's handle
+    if (selectedRectIndex !== null) {
+      const rect = rectangles[selectedRectIndex]
+      const handle = detectResizeHandle(pos.x, pos.y, rect, scaleX, scaleY)
+
+      if (handle) {
+        setDragMode(handle)
+        setDragStart(pos)
+        setOriginalRect({ ...rect })
+        return
+      }
+    }
+
+    // Check if clicking on any rectangle
+    for (let i = rectangles.length - 1; i >= 0; i--) {
+      if (isPointInRect(pos.x, pos.y, rectangles[i], scaleX, scaleY)) {
+        setSelectedRectIndex(i)
+        setDragMode('move')
+        setDragStart(pos)
+        setOriginalRect({ ...rectangles[i] })
+        return
+      }
+    }
+
+    // Deselect
+    setSelectedRectIndex(null)
+  }
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const pos = getMousePos(e)
+    const image = imageRef.current
+    const canvas = canvasRef.current
+    if (
+      !pos ||
+      !image ||
+      !canvas ||
+      !dragMode ||
+      !dragStart ||
+      !originalRect ||
+      selectedRectIndex === null
+    ) {
+      // Update cursor
+      if (pos && image && canvas && selectedRectIndex !== null) {
+        const scaleX = image.clientWidth / image.naturalWidth
+        const scaleY = image.clientHeight / image.naturalHeight
+        const handle = detectResizeHandle(
+          pos.x,
+          pos.y,
+          rectanglesRef.current[selectedRectIndex],
+          scaleX,
+          scaleY
+        )
+
+        if (handle) {
+          const cursors: Record<string, string> = {
+            'resize-tl': 'nwse-resize',
+            'resize-tr': 'nesw-resize',
+            'resize-bl': 'nesw-resize',
+            'resize-br': 'nwse-resize',
+            'resize-t': 'ns-resize',
+            'resize-b': 'ns-resize',
+            'resize-l': 'ew-resize',
+            'resize-r': 'ew-resize'
+          }
+          canvas.style.cursor = cursors[handle] || 'default'
+        } else if (
+          isPointInRect(pos.x, pos.y, rectanglesRef.current[selectedRectIndex], scaleX, scaleY)
+        ) {
+          canvas.style.cursor = 'move'
+        } else {
+          canvas.style.cursor = 'default'
+        }
+      } else if (canvas) {
+        canvas.style.cursor = 'default'
+      }
+      return
+    }
+
+    const scaleX = image.clientWidth / image.naturalWidth
+    const scaleY = image.clientHeight / image.naturalHeight
+
+    const dx = (pos.x - dragStart.x) / scaleX
+    const dy = (pos.y - dragStart.y) / scaleY
+
+    // Cancel previous animation frame
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current)
+    }
+
+    // Update rectanglesRef trực tiếp (không trigger re-render)
+    const newRectangles = [...rectanglesRef.current]
+
+    if (dragMode === 'move') {
+      newRectangles[selectedRectIndex] = {
+        ...originalRect,
+        x: originalRect.x + dx,
+        y: originalRect.y + dy
+      }
+    } else if (dragMode.startsWith('resize-')) {
+      let newX = originalRect.x
+      let newY = originalRect.y
+      let newW = originalRect.w
+      let newH = originalRect.h
+
+      if (dragMode.includes('l')) {
+        newX = originalRect.x + dx
+        newW = originalRect.w - dx
+      }
+      if (dragMode.includes('r')) {
+        newW = originalRect.w + dx
+      }
+      if (dragMode.includes('t')) {
+        newY = originalRect.y + dy
+        newH = originalRect.h - dy
+      }
+      if (dragMode.includes('b')) {
+        newH = originalRect.h + dy
+      }
+
+      // Minimum size
+      if (newW < 10) newW = 10
+      if (newH < 10) newH = 10
+
+      newRectangles[selectedRectIndex] = {
+        ...originalRect,
+        x: newX,
+        y: newY,
+        w: newW,
+        h: newH
+      }
+    }
+
+    rectanglesRef.current = newRectangles
+
+    // Redraw trong animation frame
+    animationFrameRef.current = requestAnimationFrame(() => {
+      drawRectangles()
+    })
+  }
+
+  const handleMouseUp = () => {
+    // Cancel animation frame nếu có
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current)
+      animationFrameRef.current = null
+    }
+
+    // Commit thay đổi vào state
+    if (dragMode) {
+      setRectangles([...rectanglesRef.current])
+      // Redraw một lần cuối sau khi commit
+      requestAnimationFrame(() => {
+        drawRectangles()
+      })
+    }
+
+    setDragMode(null)
+    setDragStart(null)
+    setOriginalRect(null)
+  }
 
   useEffect(() => {
     const container = containerRef.current
@@ -197,12 +507,17 @@ const ProcessPanel: FC<ProcessPanelProps> = ({ onScrollSync, syncScrollTop }) =>
               src={currentImage}
               alt={`Processed Image ${currentImageIndex + 1}`}
               className="w-full h-auto object-contain"
-              style={{ display: 'block' }}
+              style={{ display: 'block', userSelect: 'none' }}
+              draggable={false}
             />
             <canvas
               ref={canvasRef}
-              className="absolute top-0 left-0 pointer-events-none"
+              className="absolute top-0 left-0"
               style={{ display: 'block' }}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
             />
           </div>
         ) : (
@@ -215,14 +530,6 @@ const ProcessPanel: FC<ProcessPanelProps> = ({ onScrollSync, syncScrollTop }) =>
           </div>
         )}
       </div>
-
-      {processedResults.length > 0 && (
-        <div className="px-4 py-2 bg-card-background border-t border-border-default">
-          <p className="text-xs text-text-secondary text-center">
-            Image {currentImageIndex + 1} of {processedResults.length}
-          </p>
-        </div>
-      )}
     </div>
   )
 }

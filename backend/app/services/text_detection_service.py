@@ -45,77 +45,125 @@ class TextDetectionService:
             raise RuntimeError("Text detection model not loaded")
         
         try:
-            # Clone ảnh gốc để không modify input
-            final_image = original_image.copy()
+            logger.info(f"[TEXT_DETECTION] Starting text removal for {len(segments)} segments")
             
-            # Process TỪNG segment riêng biệt
-            for segment in segments:
+            # BƯỚC 1: TẠO BLANK CANVAS VỚI CHỈ CÓ BALLOON REGIONS
+            original_h, original_w = original_image.shape[:2]
+            blank_canvas = np.full((original_h, original_w, 3), 0, dtype=np.uint8)
+            
+            logger.info(f"[TEXT_DETECTION] Created blank canvas: {blank_canvas.shape}")
+            
+            # Paste CHỈ balloon regions vào blank canvas
+            for idx, segment in enumerate(segments):
                 x1, y1, x2, y2 = segment['box']
                 mask = segment['mask']
                 
-                # Crop segment region từ ảnh gốc
                 cropped_region = original_image[y1:y2, x1:x2].copy()
                 cropped_mask = mask[y1:y2, x1:x2]
                 
-                # Detect và remove text CHỈ trong segment này
-                cleaned_region = self._remove_text_from_segment(cropped_region, cropped_mask)
+                # Resize mask nếu cần
+                if cropped_mask.shape[:2] != cropped_region.shape[:2]:
+                    cropped_mask = cv2.resize(cropped_mask, 
+                                            (cropped_region.shape[1], cropped_region.shape[0]), 
+                                            interpolation=cv2.INTER_NEAREST)
                 
-                # Paste cleaned region back với mask
+                mask_3ch = np.stack([cropped_mask] * 3, axis=-1)
+                canvas_roi = blank_canvas[y1:y2, x1:x2]
+                
+                if canvas_roi.shape != cropped_region.shape:
+                    cropped_region = cv2.resize(cropped_region, 
+                                               (canvas_roi.shape[1], canvas_roi.shape[0]), 
+                                               interpolation=cv2.INTER_LINEAR)
+                    mask_3ch = cv2.resize(mask_3ch, 
+                                         (canvas_roi.shape[1], canvas_roi.shape[0]), 
+                                         interpolation=cv2.INTER_NEAREST)
+                
+                blank_canvas[y1:y2, x1:x2] = np.where(mask_3ch > 0, cropped_region, canvas_roi)
+            
+            logger.info(f"[TEXT_DETECTION] Blank canvas created with {len(segments)} balloon regions")
+            
+            # BƯỚC 2: CHẠY TEXT DETECTION TRÊN BLANK CANVAS
+            cleaned_canvas, text_mask = self._remove_text_from_canvas(blank_canvas)
+            
+            logger.info(f"[TEXT_DETECTION] Text detection completed on blank canvas")
+            
+            # BƯỚC 3: PASTE CLEANED SEGMENTS BACK TO ORIGINAL
+            final_image = original_image.copy()
+            
+            for idx, segment in enumerate(segments):
+                x1, y1, x2, y2 = segment['box']
+                mask = segment['mask']
+                
+                cleaned_region = cleaned_canvas[y1:y2, x1:x2].copy()
+                cropped_mask = mask[y1:y2, x1:x2]
+                
+                if cropped_mask.shape[:2] != cleaned_region.shape[:2]:
+                    cropped_mask = cv2.resize(cropped_mask, 
+                                            (cleaned_region.shape[1], cleaned_region.shape[0]),
+                                            interpolation=cv2.INTER_NEAREST)
+                
                 mask_3ch = np.stack([cropped_mask] * 3, axis=-1)
                 roi = final_image[y1:y2, x1:x2]
                 
                 if roi.shape[:2] == cleaned_region.shape[:2]:
                     final_image[y1:y2, x1:x2] = np.where(mask_3ch > 0, cleaned_region, roi)
             
+            logger.info(f"[TEXT_DETECTION] Completed text removal - pasted back to original")
             return final_image
             
         except Exception as e:
             logger.error(f"Text detection processing error: {e}")
             raise
     
-    def _remove_text_from_segment(
+    def _remove_text_from_canvas(
         self, 
-        segment_image: np.ndarray,
-        segment_mask: np.ndarray
-    ) -> np.ndarray:
+        canvas: np.ndarray
+    ) -> tuple:
         """
-        Remove text từ MỘT segment bubble
+        Remove text từ toàn bộ blank canvas
         
         Args:
-            segment_image: Ảnh đã crop của segment (RGB)
-            segment_mask: Binary mask của segment
+            canvas: Blank canvas chỉ chứa balloon regions (RGB)
         
         Returns:
-            np.ndarray: Segment đã clean text
+            tuple: (cleaned_canvas, text_mask)
         """
-        im_h, im_w = segment_image.shape[:2]
+        im_h, im_w = canvas.shape[:2]
+        
+        logger.info(f"[TEXT_DETECTION][Canvas] Input canvas shape: {canvas.shape}")
         
         # Preprocess
-        img_in, ratio, (dw, dh) = self._letterbox(segment_image, new_shape=1024, stride=64)
+        img_in, ratio, (dw, dh) = self._letterbox(canvas, new_shape=1024, stride=64)
+        
+        logger.info(f"[TEXT_DETECTION][Canvas] After letterbox: {img_in.shape}, ratio: {ratio}, padding: ({dw},{dh})")
         
         # Convert to blob
         img_in = img_in.transpose((2, 0, 1))[::-1]
         img_in = np.array([np.ascontiguousarray(img_in)]).astype(np.float32) / 255.0
         
         # Run inference
+        logger.info(f"[TEXT_DETECTION][Canvas] Running comictextdetector.pt.onnx inference on full canvas...")
         self.model.setInput(img_in)
         output_names = self.model.getUnconnectedOutLayersNames()
         outputs = self.model.forward(output_names)
         
-        # Postprocess để lấy mask
+        logger.info(f"[TEXT_DETECTION][Canvas] Inference completed. Output count: {len(outputs)}")
+        
+        # Postprocess
         boxes, mask, scores = self._postprocess_text_detection(
             outputs, ratio, dw, dh, im_w, im_h
         )
         
-        # Apply segment mask để CHỈ inpaint trong vùng bubble
-        mask = cv2.bitwise_and(mask, mask, mask=segment_mask)
+        logger.info(f"[TEXT_DETECTION][Canvas] Text mask non-zero pixels: {np.count_nonzero(mask)}")
         
-        # Inpaint để remove text
-        segment_bgr = cv2.cvtColor(segment_image, cv2.COLOR_RGB2BGR)
-        cleaned = cv2.inpaint(segment_bgr, mask, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
+        # Inpaint toàn bộ canvas
+        canvas_bgr = cv2.cvtColor(canvas, cv2.COLOR_RGB2BGR)
+        cleaned = cv2.inpaint(canvas_bgr, mask, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
         cleaned_rgb = cv2.cvtColor(cleaned, cv2.COLOR_BGR2RGB)
         
-        return cleaned_rgb
+        logger.info(f"[TEXT_DETECTION][Canvas] Inpainting completed. Output shape: {cleaned_rgb.shape}")
+        
+        return cleaned_rgb, mask
     
     def _letterbox(self, img, new_shape=(1024, 1024), color=(0, 0, 0), stride=64):
         """Letterbox resize for text detection"""
@@ -200,11 +248,15 @@ class TextDetectionService:
         boxes = []
         scores = []
         if det is not None and len(det) > 0:
+            logger.info(f"[TEXT_DETECTION][Postprocess] Detected {len(det)} text boxes before coordinate transformation")
             resize_ratio = (im_w / (1024 - dw), im_h / (1024 - dh))
             det[..., [0, 2]] = det[..., [0, 2]] * resize_ratio[0]
             det[..., [1, 3]] = det[..., [1, 3]] * resize_ratio[1]
             
             boxes = det[..., 0:4].astype(np.int32)
             scores = np.round(det[..., 4], 3)
+            logger.info(f"[TEXT_DETECTION][Postprocess] Boxes shape: {boxes.shape}, Scores: {scores}")
+        else:
+            logger.info(f"[TEXT_DETECTION][Postprocess] No text boxes detected")
         
         return boxes, mask, scores
