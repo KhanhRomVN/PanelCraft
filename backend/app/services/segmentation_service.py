@@ -189,21 +189,12 @@ class SegmentationService:
             if cropped_original.size == 0:
                 continue
             
-            # Tìm hình chữ nhật lớn nhất bên trong segment
-            rectangle = find_largest_inscribed_rectangle(cropped_mask)
-            
-            # Adjust rectangle coordinates to global space
-            if rectangle is not None:
-                rect_x, rect_y, rect_w, rect_h = rectangle
-                global_rect = [x1 + rect_x, y1 + rect_y, rect_w, rect_h]
-            else:
-                global_rect = None
-            
+            # KHÔNG tính rectangle ở đây nữa, sẽ tính sau khi có text boxes
             segments.append(SegmentData(
                 id=i,
                 box=[x1, y1, x2, y2],
                 score=float(score),
-                rectangle=global_rect
+                rectangle=None
             ))
             
             # Lưu mask
@@ -211,28 +202,119 @@ class SegmentationService:
         
         return segments, masks
     
-    def _create_step1_visualizations(self, image: np.ndarray, segments: List[SegmentData], masks: List[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
+    def calculate_rectangles_with_text_boxes(
+        self,
+        segments: List[SegmentData],
+        masks: List[np.ndarray],
+        text_boxes_per_segment: List[np.ndarray],
+        original_image: np.ndarray
+    ) -> List[SegmentData]:
         """
-        Tạo 2 ảnh visualization cho Step 1
-        Returns: (vis_boundaries, vis_rectangles)
+        Tính rectangles cho segments dựa vào text boxes đã detect
+        
+        Args:
+            segments: List segments từ segmentation
+            masks: List masks tương ứng
+            text_boxes_per_segment: List array text boxes cho từng segment
+            original_image: Ảnh gốc
+        
+        Returns:
+            List[SegmentData]: Segments đã có rectangle
         """
-        # VIS 1: CHỈ green boundaries
-        vis_boundaries = image.copy()
+        logger.info(f"[Rectangle Calculation] ═══════════════════════════════════════")
+        logger.info(f"[Rectangle Calculation] Calculating rectangles for {len(segments)} segments")
+        
+        updated_segments = []
+        
+        for idx, seg in enumerate(segments):
+            x1, y1, x2, y2 = seg.box
+            mask = masks[idx] if idx < len(masks) else None
+            text_boxes = text_boxes_per_segment[idx] if idx < len(text_boxes_per_segment) else np.array([])
+            
+            num_boxes = len(text_boxes)
+            
+            logger.info(f"[Rect Calc] Segment #{seg.id} [{x1},{y1},{x2},{y2}]: {num_boxes} text boxes")
+            
+            rectangle = None
+            
+            # CASE 1: Double/Triple bubble (≥2 text boxes)
+            if num_boxes >= 2:
+                logger.info(f"[Rect Calc]   → Multiple boxes detected, using union of boxes")
+                
+                # Lấy union của tất cả text boxes
+                all_x1 = text_boxes[:, 0].min()
+                all_y1 = text_boxes[:, 1].min()
+                all_x2 = text_boxes[:, 2].max()
+                all_y2 = text_boxes[:, 3].max()
+                
+                # Convert to local coordinates (relative to segment)
+                local_x1 = max(0, all_x1 - x1)
+                local_y1 = max(0, all_y1 - y1)
+                local_x2 = min(x2 - x1, all_x2 - x1)
+                local_y2 = min(y2 - y1, all_y2 - y1)
+                
+                rect_w = local_x2 - local_x1
+                rect_h = local_y2 - local_y1
+                
+                if rect_w > 0 and rect_h > 0:
+                    # Convert back to global coordinates
+                    global_rect_x = x1 + local_x1
+                    global_rect_y = y1 + local_y1
+                    rectangle = [global_rect_x, global_rect_y, rect_w, rect_h]
+                    
+                    logger.info(f"[Rect Calc]   ✓ Union rectangle: [{global_rect_x},{global_rect_y},{rect_w},{rect_h}]")
+            
+            # CASE 2: Single box hoặc no box → dùng thuật toán mặc định
+            if rectangle is None:
+                logger.info(f"[Rect Calc]   → Using default algorithm (inscribed rectangle)")
+                
+                if mask is not None:
+                    cropped_mask = mask[y1:y2, x1:x2]
+                    
+                    if cropped_mask.size > 0:
+                        local_rect = find_largest_inscribed_rectangle(cropped_mask)
+                        
+                        if local_rect is not None:
+                            rect_x, rect_y, rect_w, rect_h = local_rect
+                            global_rect_x = x1 + rect_x
+                            global_rect_y = y1 + rect_y
+                            rectangle = [global_rect_x, global_rect_y, rect_w, rect_h]
+                            
+                            logger.info(f"[Rect Calc]   ✓ Default rectangle: [{global_rect_x},{global_rect_y},{rect_w},{rect_h}]")
+            
+            # Update segment with rectangle
+            updated_seg = SegmentData(
+                id=seg.id,
+                box=seg.box,
+                score=seg.score,
+                rectangle=rectangle
+            )
+            
+            updated_segments.append(updated_seg)
+        
+        logger.info(f"[Rectangle Calculation] Completed ✓")
+        logger.info(f"[Rectangle Calculation] ═══════════════════════════════════════")
+        
+        return updated_segments
+    
+    def _create_step1_visualization(self, image: np.ndarray, segments: List[SegmentData], masks: List[np.ndarray]) -> np.ndarray:
+        """
+        Tạo visualization cho Step 1: CHỈ green boundaries
+        
+        Args:
+            image: Ảnh gốc
+            segments: List segments
+            masks: List masks tương ứng
+        
+        Returns:
+            np.ndarray: Visualization với green boundaries
+        """
+        vis_image = image.copy()
         
         for i, segment in enumerate(segments):
             if i < len(masks):
                 mask = masks[i]
                 contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                cv2.drawContours(vis_boundaries, contours, -1, (0, 255, 0), thickness=3)
+                cv2.drawContours(vis_image, contours, -1, (0, 255, 0), thickness=3)
         
-        # VIS 2: Green boundaries + Red rectangles
-        vis_rectangles = vis_boundaries.copy()
-        
-        for segment in segments:
-            if segment.rectangle is not None:
-                rect_x, rect_y, rect_w, rect_h = segment.rectangle
-                cv2.rectangle(vis_rectangles, (rect_x, rect_y), 
-                            (rect_x + rect_w, rect_y + rect_h), 
-                            (255, 0, 0), thickness=2)
-        
-        return vis_boundaries, vis_rectangles
+        return vis_image

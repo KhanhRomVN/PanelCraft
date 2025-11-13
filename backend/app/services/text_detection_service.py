@@ -32,7 +32,8 @@ class TextDetectionService:
     async def process_segments(
         self, 
         original_image: np.ndarray, 
-        segments: List[dict]
+        segments: List[dict],
+        text_boxes_per_segment: List[np.ndarray] = None
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Process segments để remove text và trả về ảnh gốc đã clean + visualizations
@@ -107,7 +108,12 @@ class TextDetectionService:
                     final_image[y1:y2, x1:x2] = np.where(mask_3ch > 0, cleaned_region, roi)
             
             # Tạo Step 2 Vis 2: Text masks + boxes trên từng segment
-            text_vis = self._create_step2_vis2(blank_canvas.copy(), segments, text_mask, text_boxes)
+            logger.info(f"[STEP2] DEBUG: Creating VIS2 with text_boxes_per_segment: {len(text_boxes_per_segment) if text_boxes_per_segment else 0} segments")
+            if text_boxes_per_segment:
+                for idx, boxes in enumerate(text_boxes_per_segment):
+                    logger.info(f"[STEP2] DEBUG VIS2:   Segment #{idx}: {len(boxes)} boxes")
+            
+            text_vis = self._create_step2_vis2(blank_canvas.copy(), segments, text_mask, text_boxes_per_segment or [])
             
             return final_image, blank_canvas_with_boundaries, text_vis
             
@@ -172,10 +178,16 @@ class TextDetectionService:
         canvas: np.ndarray, 
         segments: List[dict],
         text_mask: np.ndarray,
-        text_boxes: np.ndarray
+        text_boxes_per_segment: List[np.ndarray]
     ) -> np.ndarray:
         """
-        Tạo Step 2 Vis 2: Text masks + bounding boxes trên từng segment
+        Tạo Step 2 Vis 2: Text masks + bounding boxes TRONG TỪNG segment
+        
+        Args:
+            canvas: Blank canvas với balloon regions
+            segments: List segments
+            text_mask: Global text mask
+            text_boxes_per_segment: List boxes cho TỪNG segment (global coordinates)
         """
         vis_image = canvas.copy()
         
@@ -186,11 +198,38 @@ class TextDetectionService:
         mask_3ch = np.stack([text_mask] * 3, axis=-1) / 255.0
         vis_image = (vis_image * (1 - mask_3ch * 0.5) + mask_colored * mask_3ch * 0.5).astype(np.uint8)
         
-        # Vẽ green bounding boxes
-        if len(text_boxes) > 0:
-            for box in text_boxes:
-                x1, y1, x2, y2 = box
-                cv2.rectangle(vis_image, (x1, y1), (x2, y2), (0, 255, 0), thickness=2)
+        # Vẽ green bounding boxes CHO TỪNG SEGMENT
+        logger.info(f"[VIS2 Debug] Drawing boxes for {len(text_boxes_per_segment)} segments")
+        
+        for seg_idx, boxes in enumerate(text_boxes_per_segment):
+            if len(boxes) > 0:
+                logger.info(f"[VIS2 Debug]   Segment #{seg_idx}: Drawing {len(boxes)} boxes")
+                
+                for box_idx, box in enumerate(boxes):
+                    x1, y1, x2, y2 = box
+                    cv2.rectangle(vis_image, (x1, y1), (x2, y2), (0, 255, 0), thickness=2)
+                    
+                    # Vẽ label cho mỗi box
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    font_scale = 0.5
+                    font_thickness = 2
+                    text_label = f"S{seg_idx}_B{box_idx}"
+                    
+                    (text_width, text_height), baseline = cv2.getTextSize(text_label, font, font_scale, font_thickness)
+                    
+                    text_x = x1 + 5
+                    text_y = y1 + text_height + 5
+                    
+                    # Background for text
+                    cv2.rectangle(vis_image, (text_x - 2, text_y - text_height - 2), 
+                                (text_x + text_width + 2, text_y + baseline + 2), 
+                                (0, 0, 0), -1)
+                    
+                    # Draw text
+                    cv2.putText(vis_image, text_label, (text_x, text_y), 
+                               font, font_scale, (0, 255, 0), font_thickness, cv2.LINE_AA)
+            else:
+                logger.info(f"[VIS2 Debug]   Segment #{seg_idx}: No boxes")
         
         return vis_image
     
@@ -235,6 +274,87 @@ class TextDetectionService:
         except Exception as e:
             logger.error(f"[STEP2] Error detecting text boxes: {e}")
             return np.array([]), np.array([])
+    
+    async def detect_text_in_segments(
+        self,
+        image: np.ndarray,
+        segments: List[dict]
+    ) -> List[np.ndarray]:
+        """
+        Detect text boxes TRONG từng segment (dùng cho rectangle calculation)
+        
+        Args:
+            image: Ảnh gốc (RGB)
+            segments: List segments từ segmentation
+        
+        Returns:
+            List[np.ndarray]: List text boxes cho từng segment (trong global coordinates)
+        """
+        if self.model is None:
+            raise RuntimeError("Text detection model not loaded")
+        
+        try:
+            logger.info(f"[Text in Segments] Detecting text in {len(segments)} segments")
+            
+            text_boxes_per_segment = []
+            
+            for idx, segment in enumerate(segments):
+                x1, y1, x2, y2 = segment['box']
+                mask = segment['mask']
+                
+                # Crop segment region
+                cropped_region = image[y1:y2, x1:x2].copy()
+                cropped_mask = mask[y1:y2, x1:x2]
+                
+                if cropped_region.size == 0:
+                    text_boxes_per_segment.append(np.array([]))
+                    continue
+                
+                # Resize mask nếu cần
+                if cropped_mask.shape[:2] != cropped_region.shape[:2]:
+                    cropped_mask = cv2.resize(cropped_mask, 
+                                            (cropped_region.shape[1], cropped_region.shape[0]), 
+                                            interpolation=cv2.INTER_NEAREST)
+                
+                # Apply mask to region
+                mask_3ch = np.stack([cropped_mask] * 3, axis=-1)
+                masked_region = np.where(mask_3ch > 0, cropped_region, 0)
+                
+                # Run text detection on masked region
+                img_in, ratio, (dw, dh) = self._letterbox(masked_region, new_shape=1024, stride=64)
+                
+                img_in = img_in.transpose((2, 0, 1))[::-1]
+                img_in = np.array([np.ascontiguousarray(img_in)]).astype(np.float32) / 255.0
+                
+                self.model.setInput(img_in)
+                output_names = self.model.getUnconnectedOutLayersNames()
+                outputs = self.model.forward(output_names)
+                
+                # Postprocess
+                local_boxes, _, local_scores = self._postprocess_text_detection(
+                    outputs, ratio, dw, dh, cropped_region.shape[1], cropped_region.shape[0]
+                )
+                
+                # Convert local boxes to global coordinates
+                if len(local_boxes) > 0:
+                    global_boxes = local_boxes.copy()
+                    global_boxes[:, 0] += x1  # x1
+                    global_boxes[:, 1] += y1  # y1
+                    global_boxes[:, 2] += x1  # x2
+                    global_boxes[:, 3] += y1  # y2
+                    
+                    text_boxes_per_segment.append(global_boxes)
+                    
+                    logger.info(f"[Text in Segments]   Segment #{idx}: {len(global_boxes)} boxes")
+                else:
+                    text_boxes_per_segment.append(np.array([]))
+                    logger.info(f"[Text in Segments]   Segment #{idx}: 0 boxes")
+            
+            return text_boxes_per_segment
+            
+        except Exception as e:
+            logger.error(f"[Text in Segments] Error: {e}")
+            return [np.array([]) for _ in segments]
     
     def filter_boxes_outside_segments(
         self,

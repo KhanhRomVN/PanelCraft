@@ -57,28 +57,56 @@ class MangaPipelineService:
                 logger.info(f"[STEP1] ═══════════════════════════════════════════════════════")
                 logger.info(f"[STEP1] Starting bubble segmentation...")
                 
-                # Step 1: Segmentation
+                # Step 1: Segmentation (không tính rectangle ngay)
                 segments_data, _, masks = await self.segmentation_service.process(image_rgb)
                 results.segments = segments_data
                 
                 logger.info(f"[STEP1] Detected {len(segments_data)} bubble segments")
+                logger.info(f"[STEP1] Completed ✓")
+            
+            if ProcessingStep.FULL_PIPELINE in steps or ProcessingStep.TEXT_DETECTION in steps:
+                logger.info(f"[STEP2] ═══════════════════════════════════════════════════════")
+                logger.info(f"[STEP2] Starting text detection in segments...")
                 
-                # STEP 1 VISUALIZATION
-                vis_boundaries, vis_rectangles = self.segmentation_service._create_step1_visualizations(
+                # Step 2A: Detect text boxes TRONG từng segment (để tính rectangle)
+                segments_with_mask = []
+                
+                for i, seg in enumerate(segments_data):
+                    segments_with_mask.append({
+                        'id': seg.id,
+                        'box': seg.box,
+                        'mask': masks[i]
+                    })
+                
+                text_boxes_per_segment = await self.text_detection_service.detect_text_in_segments(
+                    image_rgb,
+                    segments_with_mask
+                )
+                
+                logger.info(f"[STEP2] Text detection in segments completed")
+                
+                # Step 2B: Tính rectangles dựa vào text boxes
+                logger.info(f"[STEP2] Calculating rectangles based on text boxes...")
+                
+                segments_data = self.segmentation_service.calculate_rectangles_with_text_boxes(
+                    segments_data,
+                    masks,
+                    text_boxes_per_segment,
+                    image_rgb
+                )
+                
+                results.segments = segments_data
+                
+                # STEP 1 VISUALIZATION (chỉ boundaries, không cần rectangles)
+                vis_boundaries = self.segmentation_service._create_step1_visualization(
                     image_rgb.copy(), segments_data, masks
                 )
                 
-                # Save Step 1 Vis 1: Boundaries only
-                step1_vis1_path = save_temp_image(vis_boundaries, "step1_boundaries")
-                step1_vis1_url = f"/temp/{os.path.basename(step1_vis1_path)}"
+                # Save Step 1 Vis: Boundaries only
+                step1_vis_path = save_temp_image(vis_boundaries, "step1_boundaries")
+                step1_vis_url = f"/temp/{os.path.basename(step1_vis_path)}"
                 
-                # Save Step 1 Vis 2: Boundaries + Rectangles
-                step1_vis2_path = save_temp_image(vis_rectangles, "step1_rectangles")
-                step1_vis2_url = f"/temp/{os.path.basename(step1_vis2_path)}"
-                
-                logger.info(f"[STEP1] Visualization 1 (Green boundaries only): {step1_vis1_url}")
-                logger.info(f"[STEP1] Visualization 2 (Boundaries + Red rectangles): {step1_vis2_url}")
-                logger.info(f"[STEP1] Completed ✓")
+                logger.info(f"[STEP1] Visualization (Green boundaries): {step1_vis_url}")
                 
                 # Extract rectangles metadata
                 rectangles = []
@@ -94,29 +122,21 @@ class MangaPipelineService:
                         })
                 results.rectangles = rectangles
                 results.original_dimensions = (image_rgb.shape[1], image_rgb.shape[0])
-            
-            if ProcessingStep.FULL_PIPELINE in steps or ProcessingStep.TEXT_DETECTION in steps:
-                logger.info(f"[STEP2] ═══════════════════════════════════════════════════════")
-                logger.info(f"[STEP2] Starting text detection and cleaning...")
                 
-                # Step 2A: Detect ALL text boxes trên ảnh gốc
+                # Step 2C: Detect ALL text boxes trên ảnh gốc
                 all_text_boxes, all_text_scores = await self.text_detection_service.detect_all_text_boxes(image_rgb)
                 logger.info(f"[STEP2] Detected {len(all_text_boxes)} text boxes globally")
                 
-                # Step 2C: Clean text TRONG bubble segments
-                segments_with_mask = []
-                
-                for i, seg in enumerate(segments_data):
-                    segments_with_mask.append({
-                        'id': seg.id,
-                        'box': seg.box,
-                        'mask': masks[i]
-                    })
-                
+                # Step 2D: Clean text TRONG bubble segments  
                 cleaned_image, blank_canvas_vis, text_vis = await self.text_detection_service.process_segments(
                     image_rgb, 
-                    segments_with_mask
+                    segments_with_mask,
+                    text_boxes_per_segment
                 )
+                
+                logger.info(f"[STEP2] DEBUG: text_boxes_per_segment passed to process_segments: {len(text_boxes_per_segment)} segments")
+                for idx, boxes in enumerate(text_boxes_per_segment):
+                    logger.info(f"[STEP2] DEBUG:   Segment #{idx}: {len(boxes)} boxes")
                 
                 # STEP 2 VISUALIZATION
                 # Save Step 2 Vis 1: Blank canvas với green boundaries
