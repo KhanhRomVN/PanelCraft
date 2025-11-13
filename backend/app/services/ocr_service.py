@@ -149,6 +149,118 @@ class OCRService:
         
         return has_meaningful_char
     
+    def calculate_ocr_confidence(self, text: str, box_area: int) -> dict:
+        """
+        Tính toán confidence score và quality metrics cho OCR text
+        
+        Returns:
+            dict: {
+                'confidence': float (0-100),
+                'quality': str ('excellent', 'good', 'fair', 'poor'),
+                'metrics': {
+                    'text_length': int,
+                    'char_density': float,
+                    'has_meaningful_chars': bool,
+                    'language_detected': str,
+                    'special_char_ratio': float
+                }
+            }
+        """
+        text_stripped = text.strip()
+        
+        if not text_stripped:
+            return {
+                'confidence': 0.0,
+                'quality': 'poor',
+                'metrics': {
+                    'text_length': 0,
+                    'char_density': 0.0,
+                    'has_meaningful_chars': False,
+                    'language_detected': 'none',
+                    'special_char_ratio': 1.0
+                }
+            }
+        
+        # Calculate metrics
+        text_length = len(text_stripped)
+        char_density = text_length / max(box_area, 1)
+        
+        # Count character types
+        cjk_chars = sum(1 for c in text_stripped if 
+                       '\u4e00' <= c <= '\u9fff' or  # Chinese
+                       '\u3040' <= c <= '\u309f' or  # Hiragana
+                       '\u30a0' <= c <= '\u30ff' or  # Katakana
+                       '\uac00' <= c <= '\ud7af')    # Korean
+        
+        alpha_chars = sum(1 for c in text_stripped if c.isalpha())
+        digit_chars = sum(1 for c in text_stripped if c.isdigit())
+        special_chars = sum(1 for c in text_stripped if not c.isalnum() and not c.isspace())
+        
+        total_chars = len(text_stripped)
+        special_char_ratio = special_chars / max(total_chars, 1)
+        
+        # Detect language
+        if cjk_chars > alpha_chars:
+            language_detected = 'CJK'
+        elif alpha_chars > 0:
+            language_detected = 'Latin'
+        else:
+            language_detected = 'Unknown'
+        
+        has_meaningful_chars = cjk_chars > 0 or alpha_chars > 0
+        
+        # Calculate confidence score (0-100)
+        confidence = 0.0
+        
+        # Factor 1: Text length (max 30 points)
+        if text_length >= 10:
+            confidence += 30
+        elif text_length >= 5:
+            confidence += 20
+        elif text_length >= 2:
+            confidence += 10
+        
+        # Factor 2: Character density (max 25 points)
+        if 0.0001 <= char_density <= 0.01:
+            confidence += 25
+        elif 0.00005 <= char_density <= 0.02:
+            confidence += 15
+        
+        # Factor 3: Meaningful characters (max 25 points)
+        if has_meaningful_chars:
+            meaningful_ratio = (cjk_chars + alpha_chars) / max(total_chars, 1)
+            confidence += meaningful_ratio * 25
+        
+        # Factor 4: Special character ratio (max 20 points)
+        if special_char_ratio < 0.3:
+            confidence += 20 * (1 - special_char_ratio / 0.3)
+        
+        # Determine quality level
+        if confidence >= 80:
+            quality = 'excellent'
+        elif confidence >= 60:
+            quality = 'good'
+        elif confidence >= 40:
+            quality = 'fair'
+        else:
+            quality = 'poor'
+        
+        return {
+            'confidence': round(confidence, 2),
+            'quality': quality,
+            'metrics': {
+                'text_length': text_length,
+                'char_density': round(char_density, 6),
+                'has_meaningful_chars': has_meaningful_chars,
+                'language_detected': language_detected,
+                'special_char_ratio': round(special_char_ratio, 3),
+                'cjk_chars': cjk_chars,
+                'alpha_chars': alpha_chars,
+                'digit_chars': digit_chars,
+                'special_chars': special_chars
+            }
+        }
+    
     async def _run_ocr(self, image: np.ndarray) -> str:
         """Run OCR on image region"""
         try:

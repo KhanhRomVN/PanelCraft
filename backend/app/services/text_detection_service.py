@@ -438,6 +438,7 @@ class TextDetectionService:
             
             filtered_boxes = []
             filtered_texts = []
+            filtered_confidences = []
             
             filter_stats = {
                 'total': len(boxes),
@@ -447,7 +448,8 @@ class TextDetectionService:
                 'blacklist_match': 0,
                 'bad_aspect_ratio': 0,
                 'invalid_text': 0,
-                'accepted': 0
+                'accepted': 0,
+                'avg_confidence': 0.0
             }
             
             for box_idx, box in enumerate(boxes):
@@ -468,6 +470,11 @@ class TextDetectionService:
                     if 0.05 <= aspect_ratio <= 30.0:
                         filtered_boxes.append((box, box_idx))
                         filtered_texts.append("[LARGE BOX - SKIPPED OCR]")
+                        filtered_confidences.append({
+                            'confidence': 50.0,
+                            'quality': 'fair',
+                            'metrics': {'text_length': 0, 'char_density': 0.0, 'has_meaningful_chars': False, 'language_detected': 'skipped', 'special_char_ratio': 0.0}
+                        })
                         filter_stats['large_accepted'] += 1
                         logger.debug(f"[VIS3 Filter] ✓ Box #{box_idx} Large box accepted (area={area}, AR={aspect_ratio:.2f})")
                     else:
@@ -480,6 +487,11 @@ class TextDetectionService:
                     if 0.1 <= aspect_ratio <= 20.0:
                         filtered_boxes.append((box, box_idx))
                         filtered_texts.append("[NO OCR MODEL]")
+                        filtered_confidences.append({
+                            'confidence': 30.0,
+                            'quality': 'poor',
+                            'metrics': {'text_length': 0, 'char_density': 0.0, 'has_meaningful_chars': False, 'language_detected': 'unknown', 'special_char_ratio': 0.0}
+                        })
                         filter_stats['accepted'] += 1
                         logger.debug(f"[VIS3 Filter] ⚠ Box #{box_idx} No OCR model, accepting box (area={area}, AR={aspect_ratio:.2f})")
                     else:
@@ -549,15 +561,29 @@ class TextDetectionService:
                         logger.debug(f"[VIS3 Filter] ✗ Box #{box_idx} Low text density: {text_density:.6f} < {min_density} (area={area}, text_len={len(text_stripped)}) | OCR: '{text_stripped[:30]}'")
                         continue
                     
+                    # Calculate OCR confidence
+                    ocr_quality = ocr_service.calculate_ocr_confidence(text_stripped, area)
+                    confidence_score = ocr_quality['confidence']
+                    quality_level = ocr_quality['quality']
+                    
                     filtered_boxes.append((box, box_idx))
                     filtered_texts.append(text_stripped)
+                    filtered_confidences.append(ocr_quality)
                     filter_stats['accepted'] += 1
-                    logger.info(f"[VIS3 Filter] ✓ ACCEPTED | Box #{box_idx} [{x1},{y1},{x2},{y2}] area={area}px² AR={aspect_ratio:.2f} | OCR: '{text_stripped[:50]}'")
+                    
+                    logger.info(f"[VIS3 Filter] ✓ ACCEPTED | Box #{box_idx} [{x1},{y1},{x2},{y2}] area={area}px² AR={aspect_ratio:.2f}")
+                    logger.info(f"[VIS3 Quality] Confidence: {confidence_score:.1f}% ({quality_level}) | Text: '{text_stripped[:50]}'")
+                    logger.info(f"[VIS3 Quality] Metrics: len={ocr_quality['metrics']['text_length']}, density={ocr_quality['metrics']['char_density']:.6f}, lang={ocr_quality['metrics']['language_detected']}")
                     
                 except Exception as e:
                     filter_stats['ocr_failed'] += 1
                     logger.debug(f"[VIS3 Filter] ✗ Box #{box_idx} OCR Exception (area={area}) | Error: {str(e)[:50]}")
                     continue
+            
+            # Calculate average confidence
+            if len(filtered_confidences) > 0:
+                avg_conf = sum(c['confidence'] for c in filtered_confidences) / len(filtered_confidences)
+                filter_stats['avg_confidence'] = avg_conf
             
             logger.info(f"[VIS3 Filter] ──────────────────────────────────────────")
             logger.info(f"[VIS3 Filter] Filter summary:")
@@ -571,32 +597,57 @@ class TextDetectionService:
             logger.info(f"[VIS3 Filter]   ✓ ACCEPTED: {filter_stats['accepted']}")
             logger.info(f"[VIS3 Filter] Final: {len(boxes)} -> {len(filtered_boxes)} boxes")
             
+            if len(filtered_confidences) > 0:
+                logger.info(f"[VIS3 Filter] Average Confidence: {filter_stats['avg_confidence']:.1f}%")
+                quality_counts = {}
+                for conf in filtered_confidences:
+                    q = conf['quality']
+                    quality_counts[q] = quality_counts.get(q, 0) + 1
+                logger.info(f"[VIS3 Filter] Quality distribution: {quality_counts}")
+            
             if len(filtered_texts) > 0:
                 sample_texts = filtered_texts[:5]
                 logger.info(f"[VIS3 Filter] Sample accepted texts: {sample_texts}")
             
             vis3_canvas = vis2_canvas.copy()
             
-            for box, box_idx in filtered_boxes:
+            for idx, (box, box_idx) in enumerate(filtered_boxes):
                 x1, y1, x2, y2 = box
-                cv2.rectangle(vis3_canvas, (x1, y1), (x2, y2), (0, 255, 0), thickness=2)
+                
+                # Get confidence for this box
+                confidence = filtered_confidences[idx]['confidence']
+                quality = filtered_confidences[idx]['quality']
+                
+                # Color based on quality
+                if quality == 'excellent':
+                    box_color = (0, 255, 0)  # Green
+                elif quality == 'good':
+                    box_color = (0, 255, 255)  # Yellow
+                elif quality == 'fair':
+                    box_color = (0, 165, 255)  # Orange
+                else:
+                    box_color = (0, 0, 255)  # Red
+                
+                cv2.rectangle(vis3_canvas, (x1, y1), (x2, y2), box_color, thickness=2)
                 
                 font = cv2.FONT_HERSHEY_SIMPLEX
-                font_scale = 0.8
+                font_scale = 0.7
                 font_thickness = 2
-                text_label = f"#{box_idx}"
+                text_label = f"#{box_idx} {confidence:.0f}%"
                 
                 (text_width, text_height), baseline = cv2.getTextSize(text_label, font, font_scale, font_thickness)
                 
                 text_x = x1 + 5
                 text_y = y1 + text_height + 5
                 
+                # Background for text
                 cv2.rectangle(vis3_canvas, (text_x - 2, text_y - text_height - 2), 
                             (text_x + text_width + 2, text_y + baseline + 2), 
                             (0, 0, 0), -1)
                 
+                # Draw text
                 cv2.putText(vis3_canvas, text_label, (text_x, text_y), 
-                           font, font_scale, (0, 255, 0), font_thickness, cv2.LINE_AA)
+                           font, font_scale, box_color, font_thickness, cv2.LINE_AA)
             
             logger.info(f"[VIS3 Filter] ══════════════════════════════════════════════")
             
