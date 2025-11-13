@@ -16,6 +16,15 @@ interface API {
   createModelsFolder: (folderPath: string) => Promise<{ success: boolean }>
   downloadModelFile: (fileUrl: string, destPath: string) => Promise<{ success: boolean }>
   checkFileExists: (filePath: string) => Promise<boolean>
+  getSystemFonts: () => Promise<string[]>
+
+  // Storage API
+  storage: {
+    get: (key: string) => Promise<any>
+    set: (key: string, value: any) => Promise<void>
+    delete: (key: string) => Promise<void>
+    clear: () => Promise<void>
+  }
 }
 
 interface ElectronIpcRenderer {

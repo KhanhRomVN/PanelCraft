@@ -1,8 +1,10 @@
 import { useState } from 'react'
-import { Settings as SettingsIcon, Palette, Key, Bell, BarChart3, Database } from 'lucide-react'
+import { Palette, Settings as SettingsIcon, Users } from 'lucide-react'
 import AppearanceSection from './components/AppearanceSection'
+import FontSection from './components/FontSection'
+import CharacterSection from './components/CharacterSection'
 
-type SettingTab = 'general' | 'appearance' | 'gemini' | 'session' | 'analytics' | 'database'
+type SettingTab = 'font' | 'appearance' | 'character'
 
 interface SettingOption {
   id: SettingTab
@@ -12,44 +14,33 @@ interface SettingOption {
 
 const settingOptions: SettingOption[] = [
   {
-    id: 'general',
-    label: 'General',
+    id: 'font',
+    label: 'Font',
     icon: SettingsIcon
-  },
-  {
-    id: 'database',
-    label: 'Cloud Database',
-    icon: Database
-  },
-  {
-    id: 'gemini',
-    label: 'Gemini API',
-    icon: Key
-  },
-  {
-    id: 'session',
-    label: 'Session',
-    icon: Bell
-  },
-  {
-    id: 'analytics',
-    label: 'Security',
-    icon: BarChart3
   },
   {
     id: 'appearance',
     label: 'Appearance',
     icon: Palette
+  },
+  {
+    id: 'character',
+    label: 'Character',
+    icon: Users
   }
 ]
 
 const SettingPage = () => {
-  const [activeTab, setActiveTab] = useState<SettingTab>('general')
+  const [activeTab, setActiveTab] = useState<SettingTab>('font')
 
   const renderContent = () => {
     switch (activeTab) {
+      case 'font':
+        return <FontSection />
       case 'appearance':
         return <AppearanceSection />
+      case 'character':
+        return <CharacterSection />
       default:
         return null
     }

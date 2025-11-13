@@ -33,11 +33,12 @@ class PipelineResponse(BaseModel):
 class ImageResult(BaseModel):
     image_index: int
     original_path: str
-    segmentation_result: Optional[str] = None  # URL to processed image
-    text_detection_result: Optional[str] = None
-    cleaned_text_result: Optional[str] = None  # Ảnh đã clean text từ text detection
-    segments: List[SegmentData] = []
+    original_dimensions: Tuple[int, int]  # (width, height)
+    cleaned_text_result: Optional[str] = None  # URL ảnh đã clean text
+    segments: List[SegmentData] = []  # Segments với rectangles để Frontend vẽ outline
+    rectangles: List[dict] = []  # List rectangles metadata cho Frontend
     ocr_results: List[OCRResult] = []
+    text_outside_bubbles: List[dict] = []  # THÊM: Text segments ngoài bubbles với masks và OCR
 
 class BatchResponse(BaseModel):
     request_id: str

@@ -1,11 +1,11 @@
 // src/renderer/src/electron.d.ts
 
+// src/renderer/src/electron.d.ts
 export interface ElectronAPI {
   testBackend: () => Promise<{ message: string }>
   openFolderDialog: () => Promise<string | null>
   readFolderImages: (folderPath: string) => Promise<{ valid: string[]; invalid: string[] }>
   readImage: (imagePath: string) => Promise<string>
-
   // Models Management APIs
   checkModelsFolder: (folderPath: string) => Promise<{
     isValid: boolean
@@ -19,6 +19,14 @@ export interface ElectronAPI {
   downloadModelFile: (fileUrl: string, destPath: string) => Promise<{ success: boolean }>
   checkFileExists: (filePath: string) => Promise<boolean>
   fetchImageFromBackend: (imageUrl: string) => Promise<string>
+  getSystemFonts: () => Promise<string[]>
+  // Storage API
+  storage: {
+    get: (key: string) => Promise<any>
+    set: (key: string, value: any) => Promise<void>
+    delete: (key: string) => Promise<void>
+    clear: () => Promise<void>
+  }
 }
 
 declare global {

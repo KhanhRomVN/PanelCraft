@@ -1,15 +1,44 @@
-// src/renderer/src/presentation/pages/Home/components/Control/index.tsx
-import { FC, useState } from 'react'
+import { FC, useState, useEffect } from 'react'
 import CustomButton from '../../../../../components/common/CustomButton'
-import { Play, FlaskConical } from 'lucide-react'
+import { Play, Settings } from 'lucide-react'
 import { useProcessing } from '../../../../../contexts/ProcessingContext'
 import { useModels } from '../../../../../contexts/ModelsContext'
 import { BackendService } from '../../../../../services/backend.service'
+import CustomTable from '../../../../../components/common/CustomTable'
+import CustomDropdown from '../../../../../components/common/CustomDropdown'
+import SettingsDrawer from './components/SettingsDrawer'
+
+interface Character {
+  id: string
+  name: string
+  personality: string
+  notes: string
+}
+
+interface Manga {
+  id: string
+  name: string
+  characters: Character[]
+}
+
+interface TableRow {
+  id: string
+  stt: number
+  character: string
+  original: string
+  translate: string
+  font: string
+  size: number
+}
+
+const STORAGE_KEY = 'app-manga-characters'
 
 const ControlPanel: FC = () => {
-  const [testResult, setTestResult] = useState<string>('')
-  const [isTestingBackend, setIsTestingBackend] = useState(false)
   const [error, setError] = useState<string>('')
+  const [isSettingsDrawerOpen, setIsSettingsDrawerOpen] = useState(false)
+  const [mangas, setMangas] = useState<Manga[]>([])
+  const [selectedManga, setSelectedManga] = useState<string>('')
+  const [tableData, setTableData] = useState<TableRow[]>([])
 
   const {
     imagePaths,
@@ -24,23 +53,65 @@ const ControlPanel: FC = () => {
 
   const currentOCRResults = processedResults[currentImageIndex]?.ocr_results || []
 
-  const handleTest = async () => {
-    setIsTestingBackend(true)
-    setTestResult('')
+  useEffect(() => {
+    loadMangas()
+  }, [])
 
+  useEffect(() => {
+    if (currentOCRResults.length > 0) {
+      setTableData(
+        currentOCRResults.map((ocr, index) => ({
+          id: `${ocr.segment_id}-${index}`,
+          stt: index + 1,
+          character: '',
+          original: ocr.original_text,
+          translate: '',
+          font: 'Arial',
+          size: 12
+        }))
+      )
+    }
+  }, [currentOCRResults])
+
+  const loadMangas = async () => {
     try {
-      const result = await window.electronAPI.testBackend()
-      setTestResult(JSON.stringify(result, null, 2))
-    } catch (error) {
-      if (error instanceof TypeError && error.message.includes('fetch')) {
-        setTestResult('Error: Backend server is not running. Please start the backend first.')
-      } else {
-        setTestResult(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      if (window.api && window.api.storage) {
+        const stored = await window.api.storage.get(STORAGE_KEY)
+        if (stored) {
+          setMangas(stored)
+        }
       }
-    } finally {
-      setIsTestingBackend(false)
+    } catch (error) {
+      console.error('[ControlPanel] Failed to load mangas:', error)
     }
   }
+
+  const handleCharacterChange = (rowId: string, characterId: string) => {
+    setTableData((prev) =>
+      prev.map((row) => (row.id === rowId ? { ...row, character: characterId } : row))
+    )
+  }
+
+  const handleTranslateChange = (rowId: string, value: string) => {
+    setTableData((prev) =>
+      prev.map((row) => (row.id === rowId ? { ...row, translate: value } : row))
+    )
+  }
+
+  const handleFontChange = (rowId: string, font: string) => {
+    setTableData((prev) => prev.map((row) => (row.id === rowId ? { ...row, font } : row)))
+  }
+
+  const handleSizeChange = (rowId: string, size: number) => {
+    setTableData((prev) => prev.map((row) => (row.id === rowId ? { ...row, size } : row)))
+  }
+
+  const selectedMangaData = mangas.find((m) => m.id === selectedManga)
+  const characterOptions =
+    selectedMangaData?.characters.map((c) => ({
+      value: c.id,
+      label: c.name
+    })) || []
 
   const handleStartProcessing = async () => {
     if (!modelsPath) {
@@ -77,7 +148,17 @@ const ControlPanel: FC = () => {
   return (
     <div className="h-full bg-card-background flex flex-col items-center justify-center p-8">
       <div className="text-center space-y-6 max-w-md w-full">
-        <h3 className="text-xl font-semibold text-text-primary">Control Panel</h3>
+        <div className="flex items-center justify-between">
+          <h3 className="text-xl font-semibold text-text-primary">Control Panel</h3>
+          <CustomButton
+            variant="ghost"
+            size="sm"
+            icon={Settings}
+            onClick={() => setIsSettingsDrawerOpen(true)}
+            className="w-fit"
+            children={undefined}
+          />
+        </div>
 
         {hasImages && (
           <div className="space-y-4">
@@ -105,7 +186,7 @@ const ControlPanel: FC = () => {
         )}
 
         {processedResults.length > 0 && (
-          <div className="space-y-4">
+          <div className="space-y-4 w-full">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-medium text-text-primary">OCR Results</h4>
               <span className="text-xs text-text-secondary">
@@ -113,27 +194,118 @@ const ControlPanel: FC = () => {
               </span>
             </div>
 
+            <div className="w-full max-w-full">
+              <CustomDropdown
+                label="Select Manga"
+                value={selectedManga}
+                onChange={setSelectedManga}
+                options={[
+                  { value: '', label: 'No manga selected' },
+                  ...mangas.map((m) => ({ value: m.id, label: m.name }))
+                ]}
+                placeholder="Choose a manga..."
+                size="sm"
+              />
+            </div>
+
             {currentOCRResults.length > 0 ? (
-              <div className="space-y-2 max-h-60 overflow-y-auto">
-                {currentOCRResults.map((ocr, index) => (
-                  <div
-                    key={`${ocr.segment_id}-${index}`}
-                    className="p-3 bg-gray-100 dark:bg-gray-800 rounded-lg"
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-medium text-text-secondary">
-                        Segment {ocr.segment_id + 1}
-                      </span>
-                      <span className="text-xs text-text-secondary">
-                        {(ocr.confidence * 100).toFixed(1)}%
-                      </span>
-                    </div>
-                    <p className="text-sm text-text-primary break-words">{ocr.original_text}</p>
-                  </div>
-                ))}
+              <div className="h-[400px] w-full">
+                <CustomTable<TableRow>
+                  data={tableData}
+                  columns={[
+                    {
+                      accessorKey: 'stt',
+                      header: 'STT',
+                      cell: (info) => (
+                        <span className="text-text-secondary font-medium">{info.getValue()}</span>
+                      )
+                    },
+                    {
+                      accessorKey: 'character',
+                      header: 'Character',
+                      cell: (info) => {
+                        const row = info.row.original
+                        return (
+                          <select
+                            value={row.character}
+                            onChange={(e) => handleCharacterChange(row.id, e.target.value)}
+                            className="w-full px-2 py-1 text-sm bg-input-background border border-border-default rounded focus:outline-none text-text-primary"
+                            disabled={!selectedManga}
+                          >
+                            <option value="">Select...</option>
+                            {characterOptions.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                        )
+                      }
+                    },
+                    {
+                      accessorKey: 'original',
+                      header: 'Original',
+                      cell: (info) => (
+                        <span className="text-text-primary text-sm">{info.getValue()}</span>
+                      )
+                    },
+                    {
+                      accessorKey: 'translate',
+                      header: 'Translate',
+                      cell: (info) => {
+                        const row = info.row.original
+                        return (
+                          <input
+                            type="text"
+                            value={row.translate}
+                            onChange={(e) => handleTranslateChange(row.id, e.target.value)}
+                            className="w-full px-2 py-1 text-sm bg-transparent border-none focus:outline-none text-text-primary"
+                            placeholder="Enter translation..."
+                          />
+                        )
+                      }
+                    },
+                    {
+                      accessorKey: 'font',
+                      header: 'Font',
+                      cell: (info) => {
+                        const row = info.row.original
+                        return (
+                          <select
+                            value={row.font}
+                            onChange={(e) => handleFontChange(row.id, e.target.value)}
+                            className="px-2 py-1 text-sm bg-input-background border border-border-default rounded focus:outline-none text-text-primary"
+                          >
+                            <option value="Arial">Arial</option>
+                            <option value="Times">Times</option>
+                            <option value="Courier">Courier</option>
+                          </select>
+                        )
+                      }
+                    },
+                    {
+                      accessorKey: 'size',
+                      header: 'Size',
+                      cell: (info) => {
+                        const row = info.row.original
+                        return (
+                          <input
+                            type="number"
+                            value={row.size}
+                            onChange={(e) => handleSizeChange(row.id, parseInt(e.target.value))}
+                            className="w-16 px-2 py-1 text-sm bg-input-background border border-border-default rounded focus:outline-none text-text-primary"
+                          />
+                        )
+                      }
+                    }
+                  ]}
+                  showHeaderWhenEmpty={true}
+                  showFooterWhenEmpty={false}
+                  emptyStateHeight="h-48"
+                />
               </div>
             ) : (
-              <div className="p-4 bg-gray-100 dark:bg-gray-800 rounded-lg">
+              <div className="h-48 flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
                 <p className="text-sm text-text-secondary text-center">
                   {processedResults[currentImageIndex]?.cleaned_text_result
                     ? 'No text detected'
@@ -143,28 +315,11 @@ const ControlPanel: FC = () => {
             )}
           </div>
         )}
-
-        <div className="pt-8 border-t border-border-default">
-          <p className="text-sm text-text-secondary mb-4">Test backend connection</p>
-
-          <CustomButton
-            variant="secondary"
-            size="md"
-            icon={FlaskConical}
-            onClick={handleTest}
-            disabled={isTestingBackend}
-            className="w-fit mx-auto"
-          >
-            {isTestingBackend ? 'Testing...' : 'Test Backend'}
-          </CustomButton>
-
-          {testResult && (
-            <div className="mt-4 p-4 bg-gray-100 dark:bg-gray-800 rounded-lg text-left">
-              <pre className="text-xs text-text-primary overflow-auto max-h-40">{testResult}</pre>
-            </div>
-          )}
-        </div>
       </div>
+      <SettingsDrawer
+        isOpen={isSettingsDrawerOpen}
+        onClose={() => setIsSettingsDrawerOpen(false)}
+      />
     </div>
   )
 }

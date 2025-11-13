@@ -6,9 +6,15 @@ import uvicorn
 import os
 import shutil
 from typing import List, Optional
+import logging
 
 from app.api.endpoints import router as api_router
 from app.core.config import settings
+from app.core.logging_config import setup_logging
+
+# Setup logging
+setup_logging()
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Manga Processing Backend",

@@ -114,27 +114,50 @@ export function ThemeProvider({
   const [colorSettings, setColorSettings] = useState<ColorSettings>(() => {
     return getDefaultColorSettings('light')
   })
+  const [isLoading, setIsLoading] = useState(true)
 
-  // Load theme from Electron storage on mount
   useEffect(() => {
     const loadTheme = async () => {
       try {
         if (!window.api) {
           console.warn('[ThemeProvider] window.api is not available')
+          setIsLoading(false)
           return
         }
 
-        const savedTheme = await window.api.storage.get(storageKey)
+        console.log('[ThemeProvider] Loading theme from storage...')
+        const [savedTheme, savedColors] = await Promise.all([
+          window.api.storage.get(storageKey),
+          window.api.storage.get(`${storageKey}-colors`)
+        ])
+
+        console.log('[ThemeProvider] Loaded from storage:', { savedTheme, savedColors })
+
         if (savedTheme) {
           setTheme(savedTheme as Theme)
         }
 
-        const savedColors = await window.api.storage.get(`${storageKey}-colors`)
         if (savedColors) {
+          console.log('[ThemeProvider] Applying saved colors:', savedColors)
           setColorSettings(savedColors)
+        } else {
+          const effectiveTheme =
+            savedTheme === 'system'
+              ? window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark'
+                : 'light'
+              : savedTheme || defaultTheme
+          const defaultColors = getDefaultColorSettings(effectiveTheme as 'light' | 'dark')
+          console.log('[ThemeProvider] No saved colors, creating defaults:', defaultColors)
+          setColorSettings(defaultColors)
+          await window.api.storage.set(`${storageKey}-colors`, defaultColors)
+          console.log('[ThemeProvider] Default colors saved to storage')
         }
+
+        setIsLoading(false)
       } catch (error) {
         console.warn('Failed to load theme settings:', error)
+        setIsLoading(false)
       }
     }
     loadTheme()
@@ -142,13 +165,19 @@ export function ThemeProvider({
 
   const updateColorSettings = useCallback(
     async (settings: ColorSettings) => {
+      console.log('[ThemeProvider] Updating color settings:', settings)
       setColorSettings(settings)
       try {
         if (window.api) {
+          console.log('[ThemeProvider] Saving to storage with key:', `${storageKey}-colors`)
           await window.api.storage.set(`${storageKey}-colors`, settings)
+          console.log('[ThemeProvider] ✓ Color settings saved successfully')
+
+          const verify = await window.api.storage.get(`${storageKey}-colors`)
+          console.log('[ThemeProvider] Verification - Read back from storage:', verify)
         }
       } catch (e) {
-        console.warn('Failed to save color settings:', e)
+        console.error('[ThemeProvider] ✗ Failed to save color settings:', e)
       }
     },
     [storageKey]
@@ -209,8 +238,10 @@ export function ThemeProvider({
 
   // Apply theme when theme or color settings change
   useEffect(() => {
-    applyTheme()
-  }, [applyTheme])
+    if (!isLoading) {
+      applyTheme()
+    }
+  }, [applyTheme, isLoading])
 
   // Listen for system theme changes only when theme is 'system'
   useEffect(() => {
@@ -228,12 +259,14 @@ export function ThemeProvider({
 
   const handleSetTheme = useCallback(
     async (newTheme: Theme) => {
+      console.log('[ThemeProvider] Changing theme to:', newTheme)
       try {
         if (window.api) {
           await window.api.storage.set(storageKey, newTheme)
+          console.log('[ThemeProvider] ✓ Theme saved successfully')
         }
       } catch (e) {
-        console.warn('Failed to save theme:', e)
+        console.error('[ThemeProvider] ✗ Failed to save theme:', e)
       }
       setTheme(newTheme)
     },

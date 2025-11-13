@@ -23,10 +23,6 @@ async def process_images(request: PipelineRequest):
     Process a batch of images through the manga pipeline
     """
     try:
-        print(f"[API] Received request to process {len(request.image_paths)} images")
-        print(f"[API] Model base path: {request.model_base_path}")
-        print(f"[API] Steps: {request.steps}")
-        
         # Validate model paths
         if not os.path.exists(request.model_base_path):
             return PipelineResponse(
@@ -42,7 +38,6 @@ async def process_images(request: PipelineRequest):
         results = []
         for i, image_path in enumerate(request.image_paths):
             if not os.path.exists(image_path):
-                print(f"Image not found: {image_path}")
                 continue
                 
             try:
@@ -56,7 +51,6 @@ async def process_images(request: PipelineRequest):
                 results.append(result)
             except Exception as e:
                 # Continue with other images if one fails
-                print(f"Error processing image {image_path}: {e}")
                 continue
         
         return PipelineResponse(

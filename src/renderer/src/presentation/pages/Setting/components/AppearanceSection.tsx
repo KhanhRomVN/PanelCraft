@@ -17,6 +17,7 @@ const AppearanceSection = () => {
   }
 
   const applyPresetTheme = (preset: any) => {
+    console.log('[AppearanceSection] Applying preset theme:', preset.name)
     const newColorSettings = {
       primary: preset.primary,
       background: preset.background,
@@ -49,6 +50,7 @@ const AppearanceSection = () => {
       dialogShadow: preset.dialogShadow,
       dropdownShadow: preset.dropdownShadow
     }
+    console.log('[AppearanceSection] New color settings:', newColorSettings)
     setColorSettings(newColorSettings)
   }
 
@@ -60,16 +62,6 @@ const AppearanceSection = () => {
   return (
     <>
       <div className="space-y-6">
-        <div>
-          <h2 className="text-2xl font-bold text-text-primary flex items-center gap-2">
-            <Palette className="h-6 w-6 text-pink-600 dark:text-pink-400" />
-            Giao diện
-          </h2>
-          <p className="text-sm text-text-secondary mt-1">
-            Tùy chỉnh màu sắc và theme của ứng dụng
-          </p>
-        </div>
-
         <div className="space-y-4">
           <div>
             <h3 className="text-lg font-semibold mb-3 text-text-primary">Theme Mode</h3>

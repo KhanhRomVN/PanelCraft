@@ -6,7 +6,7 @@ from typing import List, Tuple, Optional
 import logging
 
 from app.models.pipeline_models import SegmentData
-from app.utils.geometry_utils import find_largest_inscribed_rectangle, apply_nms
+from app.utils.geometry_utils import find_largest_inscribed_rectangle, apply_nms, filter_segments_by_quality
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +53,22 @@ class SegmentationService:
             # Postprocess
             segments, masks = self._postprocess(outputs, scale, pad_w, pad_h, original_w, original_h, image)
             
-            # Create visualization với masks
-            visualization = self._create_visualization(image.copy(), segments, masks)
+            # Filter segments by quality using standard deviation
+            if len(segments) > 0:
+                filtered_segments, quality_stats = filter_segments_by_quality(
+                    segments, 
+                    std_threshold=2.0,
+                    min_area=100
+                )
+                
+                # Update segments và masks
+                filtered_indices = [seg.id for seg in filtered_segments]
+                filtered_masks = [masks[i] for i in range(len(masks)) if i in filtered_indices]
+                
+                segments = filtered_segments
+                masks = filtered_masks
             
-            return segments, visualization, masks
+            return segments, None, masks
             
         except Exception as e:
             logger.error(f"Segmentation processing error: {e}")
@@ -102,7 +114,7 @@ class SegmentationService:
         conf_threshold = 0.5
         valid_mask = (class_scores.squeeze() >= conf_threshold)
         if not np.any(valid_mask):
-            return []
+            return [], []
         
         valid_boxes = boxes[valid_mask]
         valid_scores = class_scores[valid_mask]
@@ -111,14 +123,11 @@ class SegmentationService:
         # Apply NMS
         nms_indices = apply_nms(valid_boxes, valid_scores.squeeze(), iou_threshold=0.45)
         if len(nms_indices) == 0:
-            print("[SEGMENTATION] No segments detected after NMS")
-            return []
+            return [], []
         
         final_boxes = valid_boxes[nms_indices]
         final_scores = valid_scores[nms_indices]
         final_mask_coeffs = valid_mask_coeffs[nms_indices]
-        
-        print(f"[SEGMENTATION] Detected {len(final_boxes)} segments after NMS (confidence >= {conf_threshold})")
         
         # Generate masks and extract segments
         mask_protos = masks_output[0]  # (32, 160, 160)
@@ -197,32 +206,33 @@ class SegmentationService:
                 rectangle=global_rect
             ))
             
-                        # Lưu mask
+            # Lưu mask
             masks.append(mask_binary)
         
-        print(f"[SEGMENTATION] Successfully processed {len(segments)} segments with valid contours")
         return segments, masks
     
-    def _create_visualization(self, image: np.ndarray, segments: List[SegmentData], masks: List[np.ndarray]) -> np.ndarray:
-        """Create visualization với contours từ mask thực tế"""
-        vis_image = image.copy()
+    def _create_step1_visualizations(self, image: np.ndarray, segments: List[SegmentData], masks: List[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Tạo 2 ảnh visualization cho Step 1
+        Returns: (vis_boundaries, vis_rectangles)
+        """
+        # VIS 1: CHỈ green boundaries
+        vis_boundaries = image.copy()
         
         for i, segment in enumerate(segments):
             if i < len(masks):
                 mask = masks[i]
-                
-                # Tìm contours từ mask
                 contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                
-                # Vẽ outline màu xanh lá (0, 255, 0) với thickness=3
-                cv2.drawContours(vis_image, contours, -1, (0, 255, 0), thickness=3)
-                
-                # Vẽ hình chữ nhật đỏ nếu có
-                if segment.rectangle is not None:
-                    rect_x, rect_y, rect_w, rect_h = segment.rectangle
-                    # Vẽ màu đỏ (255, 0, 0) với thickness=2
-                    cv2.rectangle(vis_image, (rect_x, rect_y), 
-                                (rect_x + rect_w, rect_y + rect_h), 
-                                (255, 0, 0), thickness=2)
+                cv2.drawContours(vis_boundaries, contours, -1, (0, 255, 0), thickness=3)
         
-        return vis_image
+        # VIS 2: Green boundaries + Red rectangles
+        vis_rectangles = vis_boundaries.copy()
+        
+        for segment in segments:
+            if segment.rectangle is not None:
+                rect_x, rect_y, rect_w, rect_h = segment.rectangle
+                cv2.rectangle(vis_rectangles, (rect_x, rect_y), 
+                            (rect_x + rect_w, rect_y + rect_h), 
+                            (255, 0, 0), thickness=2)
+        
+        return vis_boundaries, vis_rectangles

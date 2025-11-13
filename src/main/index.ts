@@ -9,6 +9,9 @@ import { spawn, ChildProcess } from 'child_process'
 import { getBackendPath, BACKEND_CONFIG } from './config/backend.config'
 import fetch from 'node-fetch'
 
+// Storage file path
+const STORAGE_FILE = path.join(app.getPath('userData'), 'storage.json')
+
 let mainWindow: BrowserWindow | null = null
 let backendProcess: ChildProcess | null = null
 
@@ -380,6 +383,94 @@ ipcMain.handle('image:fetchFromBackend', async (_, imageUrl: string) => {
     return `data:${mimeType};base64,${base64}`
   } catch (error) {
     console.error('Failed to fetch image from backend:', error)
+    throw error
+  }
+})
+
+// Font System APIs
+ipcMain.handle('fonts:getSystemFonts', async () => {
+  try {
+    const fontList = require('font-list')
+    const fonts = await fontList.getFonts({ disableQuoting: true })
+    return fonts.sort()
+  } catch (error) {
+    console.error('Failed to get system fonts:', error)
+    // Fallback to basic fonts if error
+    return ['Arial', 'Times New Roman', 'Courier New', 'Georgia', 'Verdana']
+  }
+})
+
+// Storage API - File-based persistent storage
+function loadStorage(): Record<string, any> {
+  try {
+    if (fs.existsSync(STORAGE_FILE)) {
+      const data = fs.readFileSync(STORAGE_FILE, 'utf8')
+      return JSON.parse(data)
+    }
+  } catch (error) {
+    console.error('[Storage] Failed to load storage file:', error)
+  }
+  return {}
+}
+
+function saveStorage(storage: Record<string, any>): void {
+  try {
+    const dir = path.dirname(STORAGE_FILE)
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true })
+    }
+    fs.writeFileSync(STORAGE_FILE, JSON.stringify(storage, null, 2), 'utf8')
+    console.log('[Storage] Data saved to:', STORAGE_FILE)
+  } catch (error) {
+    console.error('[Storage] Failed to save storage file:', error)
+    throw error
+  }
+}
+
+ipcMain.handle('storage:get', async (_, key: string) => {
+  try {
+    const storage = loadStorage()
+    console.log('[Storage] Get key:', key, '| Value:', storage[key])
+    return storage[key]
+  } catch (error) {
+    console.error('[Storage] Failed to get key:', key, error)
+    return undefined
+  }
+})
+
+ipcMain.handle('storage:set', async (_, key: string, value: any) => {
+  try {
+    const storage = loadStorage()
+    storage[key] = value
+    saveStorage(storage)
+    console.log('[Storage] Set key:', key, '| Success')
+    return { success: true }
+  } catch (error) {
+    console.error('[Storage] Failed to set key:', key, error)
+    throw error
+  }
+})
+
+ipcMain.handle('storage:delete', async (_, key: string) => {
+  try {
+    const storage = loadStorage()
+    delete storage[key]
+    saveStorage(storage)
+    console.log('[Storage] Delete key:', key, '| Success')
+    return { success: true }
+  } catch (error) {
+    console.error('[Storage] Failed to delete key:', key, error)
+    throw error
+  }
+})
+
+ipcMain.handle('storage:clear', async () => {
+  try {
+    saveStorage({})
+    console.log('[Storage] Clear all | Success')
+    return { success: true }
+  } catch (error) {
+    console.error('[Storage] Failed to clear storage:', error)
     throw error
   }
 })

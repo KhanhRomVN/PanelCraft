@@ -11,6 +11,12 @@ export interface API {
 const API_URL = process.env.VITE_API_URL || 'http://localhost:8001'
 
 const api: API = {
+  storage: {
+    get: (key: string) => ipcRenderer.invoke('storage:get', key),
+    set: (key: string, value: any) => ipcRenderer.invoke('storage:set', key, value),
+    delete: (key: string) => ipcRenderer.invoke('storage:delete', key),
+    clear: () => ipcRenderer.invoke('storage:clear')
+  },
   testBackend: async () => {
     try {
       const response = await fetch(`${API_URL}/test`)
@@ -34,7 +40,8 @@ const api: API = {
   createModelsFolder: (folderPath: string) => ipcRenderer.invoke('models:createFolder', folderPath),
   downloadModelFile: (fileUrl: string, destPath: string) =>
     ipcRenderer.invoke('models:downloadFile', fileUrl, destPath),
-  checkFileExists: (filePath: string) => ipcRenderer.invoke('models:checkFileExists', filePath)
+  checkFileExists: (filePath: string) => ipcRenderer.invoke('models:checkFileExists', filePath),
+  getSystemFonts: () => ipcRenderer.invoke('fonts:getSystemFonts')
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to
