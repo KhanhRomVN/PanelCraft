@@ -199,8 +199,8 @@ class OCRService:
         total_chars = len(text_stripped)
         special_char_ratio = special_chars / max(total_chars, 1)
         
-        # Detect language
-        if cjk_chars > alpha_chars:
+        # Detect language (ưu tiên CJK vì manga thường là Japanese)
+        if cjk_chars > 0:
             language_detected = 'CJK'
         elif alpha_chars > 0:
             language_detected = 'Latin'
@@ -235,6 +235,9 @@ class OCRService:
         if special_char_ratio < 0.3:
             confidence += 20 * (1 - special_char_ratio / 0.3)
         
+        # CRITICAL: Clamp confidence to 0-100 range
+        confidence = max(0.0, min(100.0, confidence))
+        
         # Determine quality level
         if confidence >= 80:
             quality = 'excellent'
@@ -266,12 +269,25 @@ class OCRService:
         try:
             # Convert numpy array to PIL Image
             from PIL import Image
+            
+            # Check image quality
+            if image.size == 0:
+                logger.warning(f"[OCR] Empty image provided")
+                return "[OCR ERROR]"
+            
+            # Log image info
+            h, w = image.shape[:2]
+            logger.debug(f"[OCR] Processing image: {w}x{h}px, size={image.size}bytes")
+            
             pil_image = Image.fromarray(image)
             
             # Run OCR
             text = self.ocr_model(pil_image)
             
+            logger.debug(f"[OCR] Result length: {len(text)} chars")
+            
             return text
             
         except Exception as e:
+            logger.error(f"[OCR] Exception: {str(e)}")
             return "[OCR ERROR]"

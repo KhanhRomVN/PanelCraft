@@ -439,11 +439,13 @@ class TextDetectionService:
             filtered_boxes = []
             filtered_texts = []
             filtered_confidences = []
+            rejected_boxes = []
             
             filter_stats = {
                 'total': len(boxes),
                 'too_small': 0,
                 'large_accepted': 0,
+                'poor_image_quality': 0,
                 'ocr_failed': 0,
                 'blacklist_match': 0,
                 'bad_aspect_ratio': 0,
@@ -462,6 +464,7 @@ class TextDetectionService:
                 
                 if area < BOX_MIN_SIZE:
                     filter_stats['too_small'] += 1
+                    rejected_boxes.append((box, box_idx, 'too_small'))  # THÊM
                     logger.debug(f"[VIS3 Filter] ✗ Box #{box_idx} too small (area={area} < {BOX_MIN_SIZE})")
                     continue
                 
@@ -479,6 +482,7 @@ class TextDetectionService:
                         logger.debug(f"[VIS3 Filter] ✓ Box #{box_idx} Large box accepted (area={area}, AR={aspect_ratio:.2f})")
                     else:
                         filter_stats['bad_aspect_ratio'] += 1
+                        rejected_boxes.append((box, box_idx, 'bad_aspect_ratio'))  # THÊM
                         logger.debug(f"[VIS3 Filter] ✗ Box #{box_idx} Large box rejected (bad AR={aspect_ratio:.2f})")
                     continue
                 
@@ -496,6 +500,7 @@ class TextDetectionService:
                         logger.debug(f"[VIS3 Filter] ⚠ Box #{box_idx} No OCR model, accepting box (area={area}, AR={aspect_ratio:.2f})")
                     else:
                         filter_stats['bad_aspect_ratio'] += 1
+                        rejected_boxes.append((box, box_idx, 'bad_aspect_ratio'))  # THÊM
                     continue
                 
                 # Crop region với padding
@@ -513,6 +518,24 @@ class TextDetectionService:
                 if cropped.size == 0:
                     continue
                 
+                # DEBUG: Save cropped image for inspection
+                try:
+                    from app.utils.image_utils import save_temp_image
+                    debug_path = save_temp_image(cropped, f"debug_box{box_idx}")
+                    logger.debug(f"[VIS3 Debug] Box #{box_idx} cropped saved: /temp/{os.path.basename(debug_path)}")
+                except:
+                    pass
+                
+                # BƯỚC MỚI: Check image quality TRƯỚC KHI chạy OCR
+                quality_metrics = self._calculate_image_quality(cropped)
+                
+                logger.debug(f"[VIS3 Quality] Box #{box_idx} Image Quality: blur={quality_metrics['variance']:.1f}, brightness={quality_metrics['mean_brightness']:.1f}, contrast={quality_metrics['contrast']:.1f}, sharpness={quality_metrics['sharpness_score']:.1f}%")
+                
+                if not quality_metrics['is_acceptable']:
+                    filter_stats['invalid_text'] += 1
+                    logger.debug(f"[VIS3 Filter] ✗ Box #{box_idx} Poor image quality (area={area}) | variance={quality_metrics['variance']:.1f} < 100, contrast={quality_metrics['contrast']:.1f}")
+                    continue
+                
                 try:
                     text = await ocr_service._run_ocr(cropped)
                     
@@ -521,11 +544,13 @@ class TextDetectionService:
                     aspect_ratio = width / max(height, 1)
                     if aspect_ratio < 0.03 or aspect_ratio > 30.0:
                         filter_stats['bad_aspect_ratio'] += 1
+                        rejected_boxes.append((box, box_idx, 'bad_aspect_ratio'))  # THÊM
                         logger.debug(f"[VIS3 Filter] ✗ Box #{box_idx} Bad AR={aspect_ratio:.2f} (area={area}) | OCR: '{text[:50] if text else 'NONE'}'")
                         continue
                     
                     if not text or text == "[OCR ERROR]":
                         filter_stats['ocr_failed'] += 1
+                        rejected_boxes.append((box, box_idx, 'ocr_failed'))  # THÊM
                         logger.debug(f"[VIS3 Filter] ✗ Box #{box_idx} OCR failed (area={area}) | Result: '{text}'")
                         continue
                     
@@ -534,6 +559,7 @@ class TextDetectionService:
                         min_chars_for_large_box = 10
                         if len(text.strip()) < min_chars_for_large_box:
                             filter_stats['invalid_text'] += 1
+                            rejected_boxes.append((box, box_idx, 'too_few_chars'))  # THÊM
                             logger.debug(f"[VIS3 Filter] ✗ Box #{box_idx} Large box with too few chars: {len(text.strip())} < {min_chars_for_large_box} (area={area}) | OCR: '{text[:50]}'")
                             continue
                     
@@ -541,6 +567,7 @@ class TextDetectionService:
                     
                     if len(text_stripped) < 5:
                         filter_stats['invalid_text'] += 1
+                        rejected_boxes.append((box, box_idx, 'text_too_short'))  # THÊM
                         logger.debug(f"[VIS3 Filter] ✗ Box #{box_idx} Text too short: '{text_stripped}' (area={area}) | len={len(text_stripped)}")
                         continue
                     
@@ -549,6 +576,7 @@ class TextDetectionService:
                     
                     if not is_valid:
                         filter_stats['invalid_text'] += 1
+                        rejected_boxes.append((box, box_idx, 'invalid_text'))  # THÊM
                         logger.debug(f"[VIS3 Filter] ✗ Box #{box_idx} Invalid text: '{text_stripped}' (area={area}) | Failed validity check")
                         continue
                     
@@ -558,6 +586,7 @@ class TextDetectionService:
                     
                     if text_density < min_density:
                         filter_stats['invalid_text'] += 1
+                        rejected_boxes.append((box, box_idx, 'low_density'))  # THÊM
                         logger.debug(f"[VIS3 Filter] ✗ Box #{box_idx} Low text density: {text_density:.6f} < {min_density} (area={area}, text_len={len(text_stripped)}) | OCR: '{text_stripped[:30]}'")
                         continue
                     
@@ -577,6 +606,7 @@ class TextDetectionService:
                     
                 except Exception as e:
                     filter_stats['ocr_failed'] += 1
+                    rejected_boxes.append((box, box_idx, 'ocr_exception'))  # THÊM
                     logger.debug(f"[VIS3 Filter] ✗ Box #{box_idx} OCR Exception (area={area}) | Error: {str(e)[:50]}")
                     continue
             
@@ -590,6 +620,7 @@ class TextDetectionService:
             logger.info(f"[VIS3 Filter]   Total input boxes: {filter_stats['total']}")
             logger.info(f"[VIS3 Filter]   ✗ Too small (< {BOX_MIN_SIZE}px²): {filter_stats['too_small']}")
             logger.info(f"[VIS3 Filter]   ✓ Large boxes accepted (> {OCR_MAX_SIZE}px²): {filter_stats['large_accepted']}")
+            logger.info(f"[VIS3 Filter]   ✗ Poor image quality (blur/low contrast): {filter_stats['poor_image_quality']}")
             logger.info(f"[VIS3 Filter]   ✗ OCR failed: {filter_stats['ocr_failed']}")
             logger.info(f"[VIS3 Filter]   ✗ Blacklist match: {filter_stats['blacklist_match']}")
             logger.info(f"[VIS3 Filter]   ✗ Bad aspect ratio: {filter_stats['bad_aspect_ratio']}")
@@ -648,6 +679,36 @@ class TextDetectionService:
                 # Draw text
                 cv2.putText(vis3_canvas, text_label, (text_x, text_y), 
                            font, font_scale, box_color, font_thickness, cv2.LINE_AA)
+            
+            # VẼ REJECTED BOXES MÀU VÀNG
+            for box, box_idx, reject_reason in rejected_boxes:
+                x1, y1, x2, y2 = box
+                
+                # Màu vàng cho rejected boxes
+                yellow_color = (0, 255, 255)  # Yellow in BGR
+                
+                # Vẽ box màu vàng
+                cv2.rectangle(vis3_canvas, (x1, y1), (x2, y2), yellow_color, thickness=2)
+                
+                # Vẽ label
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 0.6
+                font_thickness = 2
+                text_label = f"#{box_idx} X"
+                
+                (text_width, text_height), baseline = cv2.getTextSize(text_label, font, font_scale, font_thickness)
+                
+                text_x = x1 + 5
+                text_y = y1 + text_height + 5
+                
+                # Background for text
+                cv2.rectangle(vis3_canvas, (text_x - 2, text_y - text_height - 2), 
+                            (text_x + text_width + 2, text_y + baseline + 2), 
+                            (0, 0, 0), -1)
+                
+                # Draw text
+                cv2.putText(vis3_canvas, text_label, (text_x, text_y), 
+                           font, font_scale, yellow_color, font_thickness, cv2.LINE_AA)
             
             logger.info(f"[VIS3 Filter] ══════════════════════════════════════════════")
             
@@ -1043,3 +1104,83 @@ class TextDetectionService:
                 meaningful_chars += 1
         
         return meaningful_chars / box_area
+    
+    def _calculate_image_quality(
+        self,
+        image: np.ndarray
+    ) -> dict:
+        """
+        Tính toán image quality metrics
+        
+        Args:
+            image: Cropped image region (RGB)
+        
+        Returns:
+            dict: {
+                'variance': float,  # Variance of Laplacian (blur detection)
+                'mean_brightness': float,  # Average brightness
+                'contrast': float,  # Standard deviation of brightness
+                'sharpness_score': float,  # 0-100
+                'is_acceptable': bool
+            }
+        """
+        try:
+            # Convert to grayscale
+            if len(image.shape) == 3:
+                gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+            else:
+                gray = image
+            
+            # 1. Blur detection using Laplacian variance
+            laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+            
+            # 2. Brightness analysis
+            mean_brightness = np.mean(gray)
+            
+            # 3. Contrast analysis (standard deviation)
+            contrast = np.std(gray)
+            
+            # 4. Calculate sharpness score (0-100)
+            # Laplacian variance thresholds:
+            # < 50: very blurry
+            # 50-100: blurry
+            # 100-500: acceptable
+            # > 500: sharp
+            if laplacian_var >= 500:
+                sharpness_score = 100
+            elif laplacian_var >= 100:
+                sharpness_score = 50 + (laplacian_var - 100) / 400 * 50
+            elif laplacian_var >= 50:
+                sharpness_score = 25 + (laplacian_var - 50) / 50 * 25
+            else:
+                sharpness_score = laplacian_var / 50 * 25
+            
+            # 5. Quality thresholds
+            MIN_LAPLACIAN_VAR = 100  # Minimum sharpness
+            MIN_CONTRAST = 15        # Minimum contrast
+            MIN_BRIGHTNESS = 20      # Too dark
+            MAX_BRIGHTNESS = 235     # Too bright (washed out)
+            
+            is_acceptable = (
+                laplacian_var >= MIN_LAPLACIAN_VAR and
+                contrast >= MIN_CONTRAST and
+                MIN_BRIGHTNESS <= mean_brightness <= MAX_BRIGHTNESS
+            )
+            
+            return {
+                'variance': round(laplacian_var, 2),
+                'mean_brightness': round(mean_brightness, 2),
+                'contrast': round(contrast, 2),
+                'sharpness_score': round(sharpness_score, 2),
+                'is_acceptable': is_acceptable
+            }
+            
+        except Exception as e:
+            logger.error(f"[Image Quality] Error: {e}")
+            return {
+                'variance': 0.0,
+                'mean_brightness': 0.0,
+                'contrast': 0.0,
+                'sharpness_score': 0.0,
+                'is_acceptable': False
+            }
