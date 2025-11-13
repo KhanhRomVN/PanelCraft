@@ -108,16 +108,17 @@ class MangaPipelineService:
                 
                 logger.info(f"[STEP1] Visualization (Green boundaries): {step1_vis_url}")
                 
-                # Extract rectangles metadata
+                # Extract rectangles metadata (hỗ trợ nhiều rectangles cho 1 segment)
                 rectangles = []
                 for seg in segments_data:
-                    if seg.rectangle:
-                        x, y, w, h = seg.rectangle
+                    for rect_idx, rectangle in enumerate(seg.rectangles):
+                        x, y, w, h = rectangle
                         rectangles.append({
-                            'id': seg.id,
+                            'segment_id': seg.id,
+                            'rect_id': rect_idx,
                             'x': x,
                             'y': y,
-                            'w': w,
+                            'w': w, 
                             'h': h
                         })
                 results.rectangles = rectangles
@@ -155,6 +156,23 @@ class MangaPipelineService:
                 logger.info(f"[STEP2] Visualization 1 (Blank canvas with boundaries): {step2_vis1_url}")
                 logger.info(f"[STEP2] Visualization 2 (Text masks + boxes): {step2_vis2_url}")
                 logger.info(f"[STEP2] Cleaned image: {results.cleaned_text_result}")
+                
+                # STEP 2 VISUALIZATION 3: Rectangles (màu đỏ) - TẠO SAU VIS 1 & 2
+                try:
+                    vis_rectangles = self.segmentation_service._create_step2_visualization3(
+                        image_rgb.copy(), segments_data, masks
+                    )
+                    
+                    # Save Step 2 Vis 3: Rectangles overlay
+                    step2_vis3_path = save_temp_image(vis_rectangles, "step2_rectangles")
+                    step2_vis3_url = f"/temp/{os.path.basename(step2_vis3_path)}"
+                    
+                    logger.info(f"[STEP2] Visualization 3 (Rectangles overlay): {step2_vis3_url}")
+                except Exception as e:
+                    logger.error(f"[STEP2] Error creating Visualization 3: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                
                 logger.info(f"[STEP2] Completed ✓")
                 
                 # Step 2B: Filter để tìm text boxes NGOÀI bubble segments

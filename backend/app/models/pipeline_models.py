@@ -13,7 +13,7 @@ class SegmentData(BaseModel):
     id: int
     box: List[int]  # [x1, y1, x2, y2]
     score: float
-    rectangle: Optional[List[int]] = None  # [x, y, w, h] - Largest inscribed rectangle
+    rectangles: List[List[int]] = []  # THAY ĐỔI: List of rectangles [x, y, w, h]
 
 class OCRResult(BaseModel):
     segment_id: int

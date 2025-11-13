@@ -194,7 +194,7 @@ class SegmentationService:
                 id=i,
                 box=[x1, y1, x2, y2],
                 score=float(score),
-                rectangle=None
+                rectangles=[]
             ))
             
             # Lưu mask
@@ -212,6 +212,11 @@ class SegmentationService:
         """
         Tính rectangles cho segments dựa vào text boxes đã detect
         
+        Logic mới:
+        - Nếu ≥2 text boxes: Tạo 1 rectangle cho MỖI text box
+        - Nếu 1 text box: Tạo 1 rectangle từ default algorithm
+        - Nếu 0 text boxes: Tạo 1 rectangle từ default algorithm
+        
         Args:
             segments: List segments từ segmentation
             masks: List masks tương ứng
@@ -219,7 +224,7 @@ class SegmentationService:
             original_image: Ảnh gốc
         
         Returns:
-            List[SegmentData]: Segments đã có rectangle
+            List[SegmentData]: Segments đã có rectangles (list)
         """
         logger.info(f"[Rectangle Calculation] ═══════════════════════════════════════")
         logger.info(f"[Rectangle Calculation] Calculating rectangles for {len(segments)} segments")
@@ -235,37 +240,40 @@ class SegmentationService:
             
             logger.info(f"[Rect Calc] Segment #{seg.id} [{x1},{y1},{x2},{y2}]: {num_boxes} text boxes")
             
-            rectangle = None
+            rectangles = []
             
-            # CASE 1: Double/Triple bubble (≥2 text boxes)
+            # CASE 1: Multiple text boxes (≥2) → Tạo 1 rectangle cho MỖI text box
             if num_boxes >= 2:
-                logger.info(f"[Rect Calc]   → Multiple boxes detected, using union of boxes")
+                logger.info(f"[Rect Calc]   → Multiple boxes detected, creating {num_boxes} separate rectangles")
                 
-                # Lấy union của tất cả text boxes
-                all_x1 = text_boxes[:, 0].min()
-                all_y1 = text_boxes[:, 1].min()
-                all_x2 = text_boxes[:, 2].max()
-                all_y2 = text_boxes[:, 3].max()
-                
-                # Convert to local coordinates (relative to segment)
-                local_x1 = max(0, all_x1 - x1)
-                local_y1 = max(0, all_y1 - y1)
-                local_x2 = min(x2 - x1, all_x2 - x1)
-                local_y2 = min(y2 - y1, all_y2 - y1)
-                
-                rect_w = local_x2 - local_x1
-                rect_h = local_y2 - local_y1
-                
-                if rect_w > 0 and rect_h > 0:
-                    # Convert back to global coordinates
-                    global_rect_x = x1 + local_x1
-                    global_rect_y = y1 + local_y1
-                    rectangle = [global_rect_x, global_rect_y, rect_w, rect_h]
+                for tb_idx, tb in enumerate(text_boxes):
+                    tb_x1, tb_y1, tb_x2, tb_y2 = tb
+                    tb_w = tb_x2 - tb_x1
+                    tb_h = tb_y2 - tb_y1
                     
-                    logger.info(f"[Rect Calc]   ✓ Union rectangle: [{global_rect_x},{global_rect_y},{rect_w},{rect_h}]")
+                    logger.info(f"[Rect Calc]     Box #{tb_idx}: [{tb_x1},{tb_y1},{tb_x2},{tb_y2}] size={tb_w}x{tb_h}")
+                    
+                    # Convert text box to rectangle (global coordinates)
+                    # Text box đã ở global coordinates rồi, chỉ cần convert format
+                    rect_x = tb_x1
+                    rect_y = tb_y1
+                    rect_w = tb_w
+                    rect_h = tb_h
+                    
+                    # Clamp to segment bounds
+                    rect_x = max(x1, rect_x)
+                    rect_y = max(y1, rect_y)
+                    rect_w = min(x2 - rect_x, rect_w)
+                    rect_h = min(y2 - rect_y, rect_h)
+                    
+                    if rect_w > 0 and rect_h > 0:
+                        rectangles.append([rect_x, rect_y, rect_w, rect_h])
+                        logger.info(f"[Rect Calc]     ✓ Rectangle #{tb_idx}: [{rect_x},{rect_y},{rect_w},{rect_h}]")
+                
+                logger.info(f"[Rect Calc]   ✓ Created {len(rectangles)} rectangles for {num_boxes} text boxes")
             
-            # CASE 2: Single box hoặc no box → dùng thuật toán mặc định
-            if rectangle is None:
+            # CASE 2: Single box hoặc no box → Dùng thuật toán default
+            else:
                 logger.info(f"[Rect Calc]   → Using default algorithm (inscribed rectangle)")
                 
                 if mask is not None:
@@ -278,16 +286,16 @@ class SegmentationService:
                             rect_x, rect_y, rect_w, rect_h = local_rect
                             global_rect_x = x1 + rect_x
                             global_rect_y = y1 + rect_y
-                            rectangle = [global_rect_x, global_rect_y, rect_w, rect_h]
+                            rectangles.append([global_rect_x, global_rect_y, rect_w, rect_h])
                             
                             logger.info(f"[Rect Calc]   ✓ Default rectangle: [{global_rect_x},{global_rect_y},{rect_w},{rect_h}]")
             
-            # Update segment with rectangle
+            # Update segment with rectangles (list)
             updated_seg = SegmentData(
                 id=seg.id,
                 box=seg.box,
                 score=seg.score,
-                rectangle=rectangle
+                rectangles=rectangles
             )
             
             updated_segments.append(updated_seg)
@@ -309,12 +317,65 @@ class SegmentationService:
         Returns:
             np.ndarray: Visualization với green boundaries
         """
-        vis_image = image.copy()
+        vis_image = image.copy()    
         
         for i, segment in enumerate(segments):
             if i < len(masks):
                 mask = masks[i]
                 contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 cv2.drawContours(vis_image, contours, -1, (0, 255, 0), thickness=3)
+        
+        return vis_image
+    
+    def _create_step2_visualization3(self, image: np.ndarray, segments: List[SegmentData], masks: List[np.ndarray]) -> np.ndarray:
+        """
+        Tạo visualization cho Step 2 Vis 3: Vẽ TẤT CẢ rectangles màu đỏ lên ảnh gốc
+        
+        Logic mới:
+        - Vẽ TẤT CẢ rectangles trong list (hỗ trợ nhiều rectangles cho 1 segment)
+        - Mỗi rectangle có label riêng: S{segment_id}_R{rect_idx}
+        
+        Args:
+            image: Ảnh gốc
+            segments: List segments với rectangles (list) đã tính
+            masks: List masks (không dùng nhưng giữ để tương thích API)
+        
+        Returns:
+            np.ndarray: Visualization với red rectangles
+        """
+        vis_image = image.copy()
+        
+        for segment in segments:
+            if len(segment.rectangles) > 0:
+                for rect_idx, rectangle in enumerate(segment.rectangles):
+                    x, y, w, h = rectangle
+                    
+                    # Vẽ rectangle màu đỏ (thickness=3)
+                    cv2.rectangle(vis_image, (x, y), (x + w, y + h), (255, 0, 0), thickness=3)
+                    
+                    # Vẽ label cho mỗi rectangle
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    font_scale = 0.7
+                    font_thickness = 2
+                    
+                    # Nếu segment có nhiều rectangles, thêm index
+                    if len(segment.rectangles) > 1:
+                        text_label = f"S{segment.id}_R{rect_idx}"
+                    else:
+                        text_label = f"S{segment.id}"
+                    
+                    (text_width, text_height), baseline = cv2.getTextSize(text_label, font, font_scale, font_thickness)
+                    
+                    text_x = x + 5
+                    text_y = y + text_height + 10
+                    
+                    # Background cho text
+                    cv2.rectangle(vis_image, (text_x - 2, text_y - text_height - 2), 
+                                (text_x + text_width + 2, text_y + baseline + 2), 
+                                (0, 0, 0), -1)
+                    
+                    # Draw text
+                    cv2.putText(vis_image, text_label, (text_x, text_y), 
+                               font, font_scale, (255, 0, 0), font_thickness, cv2.LINE_AA)
         
         return vis_image
