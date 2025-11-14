@@ -427,6 +427,7 @@ class TextDetectionService:
         text_boxes_outside: np.ndarray,
         text_scores_outside: np.ndarray,
         ocr_service,
+        inpainting_service=None,
         segments_data: List = None
     ) -> Tuple[List[dict], dict]:
         """
@@ -437,9 +438,10 @@ class TextDetectionService:
             text_boxes_outside: KHÔNG SỬ DỤNG (giữ lại để tương thích API)
             text_scores_outside: KHÔNG SỬ DỤNG
             ocr_service: OCR service để verify text quality
+            inpainting_service: Inpainting service để inpaint text (optional)
         
         Returns:
-            Tuple[List[dict], np.ndarray, np.ndarray, np.ndarray]: (empty_data, vis1_masks, vis2_black_canvas, vis3_filtered)
+            Tuple[List[dict], np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]: (empty_data, vis1_masks, vis2_black_canvas, vis3_filtered, vis4_filtered_masks, vis5_inpainted)
         """
         try:
             im_h, im_w = image.shape[:2]
@@ -508,20 +510,40 @@ class TextDetectionService:
             vis2_black_canvas = (mask_colored_full * mask_3ch_full * 0.5).astype(np.uint8)
             
             # VIS 3: Filter boxes và vẽ green boxes
-            vis3_filtered = await self._create_vis3_filtered_boxes(
+            vis3_filtered, filtered_boxes_indices = await self._create_vis3_filtered_boxes(
                 vis2_black_canvas.copy(),
                 boxes_from_mask,
                 image,
                 ocr_service
             )
             
-            return [], vis1_masks_only, vis2_black_canvas, vis3_filtered
+            # VIS 4: VIS1 nhưng CHỈ giữ text masks đã được filter từ VIS3
+            vis4_filtered_masks, filtered_mask = await self._create_vis4_filtered_masks(
+                image.copy(),
+                mask,
+                boxes_from_mask,
+                filtered_boxes_indices
+            )
+            
+            # VIS 5: Inpaint text regions từ VIS4
+            vis5_inpainted = None
+            if inpainting_service is not None and filtered_mask is not None:
+                vis5_inpainted = await inpainting_service.inpaint_text_regions(
+                    image.copy(),
+                    filtered_mask,
+                    dilate_kernel_size=5
+                )
+            else:
+                logger.warning("[Text Outside] Inpainting service not available, skipping VIS5")
+                vis5_inpainted = image.copy()
+            
+            return [], vis1_masks_only, vis2_black_canvas, vis3_filtered, vis4_filtered_masks, vis5_inpainted
             
         except Exception as e:
             logger.error(f"[Text Outside] Error: {e}")
             blank = image.copy()
             black = np.zeros_like(blank)
-            return [], blank, black, black
+            return [], blank, black, black, blank, blank
     
     async def _create_vis3_filtered_boxes(
         self,
@@ -529,7 +551,7 @@ class TextDetectionService:
         boxes: np.ndarray,
         original_image: np.ndarray,
         ocr_service
-    ) -> np.ndarray:
+    ) -> Tuple[np.ndarray, List[int]]:
         """
         Tạo VIS 3: Filter boxes theo PanelCleaner approach
         
@@ -832,11 +854,74 @@ class TextDetectionService:
             
             logger.info(f"[VIS3 Filter] ══════════════════════════════════════════════")
             
-            return vis3_canvas
+            # Trả về cả vis3_canvas và list indices của filtered boxes
+            filtered_indices = [box_idx for _, box_idx in filtered_boxes]
+            return vis3_canvas, filtered_indices
             
         except Exception as e:
             logger.error(f"[VIS3 Filter] Error: {e}")
-            return vis2_canvas
+            return vis2_canvas, []
+    
+    async def _create_vis4_filtered_masks(
+        self,
+        image: np.ndarray,
+        full_mask: np.ndarray,
+        all_boxes: np.ndarray,
+        filtered_indices: List[int]
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Tạo VIS 4: Cleaned image + CHỈ text masks đã được filter từ VIS3
+        
+        Logic:
+        - Background: Cleaned image (giống VIS1)
+        - CHỈ vẽ text masks của boxes đã pass filter VIS3
+        - Loại bỏ text masks của boxes bị reject
+        
+        Args:
+            image: Cleaned image (RGB)
+            full_mask: Global text mask từ model (H, W)
+            all_boxes: Tất cả boxes extracted [x1, y1, x2, y2]
+            filtered_indices: List indices của boxes đã pass filter VIS3
+        
+        Returns:
+            Tuple[np.ndarray, np.ndarray]: (VIS4 image, filtered_mask)
+        """
+        try:
+            logger.info(f"[VIS4 Filter] Creating VIS4 with {len(filtered_indices)} filtered masks")
+            
+            # Tạo mask mới CHỈ chứa filtered boxes
+            filtered_mask = np.zeros_like(full_mask, dtype=np.uint8)
+            
+            for idx in filtered_indices:
+                if idx < len(all_boxes):
+                    box = all_boxes[idx]
+                    x1, y1, x2, y2 = box
+                    
+                    # Extract region từ original mask
+                    mask_region = full_mask[y1:y2, x1:x2]
+                    
+                    # Paste vào filtered mask
+                    filtered_mask[y1:y2, x1:x2] = np.maximum(
+                        filtered_mask[y1:y2, x1:x2],
+                        mask_region
+                    )
+            
+            # Vẽ filtered mask lên cleaned image (giống VIS1 logic)
+            vis4_canvas = image.copy()
+            
+            mask_colored = np.zeros_like(vis4_canvas)
+            mask_colored[:, :] = [255, 0, 0]  # Red color
+            
+            mask_3ch = np.stack([filtered_mask] * 3, axis=-1) / 255.0
+            vis4_canvas = (vis4_canvas * (1 - mask_3ch * 0.5) + mask_colored * mask_3ch * 0.5).astype(np.uint8)
+            
+            logger.info(f"[VIS4 Filter] VIS4 created successfully with {len(filtered_indices)} masks")
+            
+            return vis4_canvas, filtered_mask
+            
+        except Exception as e:
+            logger.error(f"[VIS4 Filter] Error: {e}")
+            return image, np.zeros_like(full_mask, dtype=np.uint8)
     
     def _letterbox(self, img, new_shape=(1024, 1024), color=(0, 0, 0), stride=64):
         """Letterbox resize for text detection"""

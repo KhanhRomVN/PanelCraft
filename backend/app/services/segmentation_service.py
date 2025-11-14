@@ -271,6 +271,19 @@ class SegmentationService:
                         logger.info(f"[Rect Calc]     ✓ Rectangle #{tb_idx}: [{rect_x},{rect_y},{rect_w},{rect_h}]")
                 
                 logger.info(f"[Rect Calc]   ✓ Created {len(rectangles)} rectangles for {num_boxes} text boxes")
+                
+                # BƯỚC MỚI: Expand rectangles với constraints
+                if len(rectangles) >= 2:
+                    logger.info(f"[Rect Calc]   → Expanding {len(rectangles)} rectangles with constraints...")
+                    rectangles = self._expand_rectangles_with_constraints(
+                        rectangles=rectangles,
+                        segment_box=seg.box,
+                        mask=mask,
+                        max_padding=50,
+                        padding_step=2,
+                        min_gap=5
+                    )
+                    logger.info(f"[Rect Calc]   ✓ Rectangle expansion completed")
             
             # CASE 2: Single box hoặc no box → Dùng thuật toán default
             else:
@@ -304,6 +317,198 @@ class SegmentationService:
         logger.info(f"[Rectangle Calculation] ═══════════════════════════════════════")
         
         return updated_segments
+    
+    def _expand_rectangles_with_constraints(
+        self,
+        rectangles: List[List[int]],
+        segment_box: List[int],
+        mask: np.ndarray,
+        max_padding: int = 200,
+        padding_step: int = 2,
+        min_gap: int = 5
+    ) -> List[List[int]]:
+        """
+        Mở rộng rectangles từ TEXT BOX GỐC để tối đa hóa diện tích với constraints:
+        - Bắt đầu từ text box gốc (đã có kích thước hợp lý)
+        - Expand đồng thời 4 hướng trong mỗi iteration
+        - Không để 2 rectangles chạm nhau (giữ min_gap)
+        - Không vượt ra ngoài segment bubble
+        
+        Args:
+            rectangles: List rectangles [x, y, w, h] (global coordinates)
+            segment_box: Segment bounding box [x1, y1, x2, y2]
+            mask: Segment mask (full image size)
+            max_padding: Padding tối đa mỗi hướng (pixels)
+            padding_step: Bước tăng padding mỗi iteration (pixels)
+            min_gap: Khoảng cách tối thiểu giữa 2 rectangles (pixels)
+        
+        Returns:
+            List[List[int]]: Expanded rectangles
+        """
+        if len(rectangles) == 0:
+            return rectangles
+        
+        logger.info(f"[Expand Rects] Starting expansion from TEXT BOXES for {len(rectangles)} rectangles")
+        logger.info(f"[Expand Rects] Parameters: max_padding={max_padding}px, step={padding_step}px, min_gap={min_gap}px")
+        
+        seg_x1, seg_y1, seg_x2, seg_y2 = segment_box
+        
+        # Initialize expanded rectangles - BẮT ĐẦU TỪ TEXT BOX GỐC (format [x1, y1, x2, y2])
+        expanded_rects = []
+        for i, rect in enumerate(rectangles):
+            x, y, w, h = rect
+            x1, y1, x2, y2 = x, y, x + w, y + h
+            expanded_rects.append([x1, y1, x2, y2])
+            logger.info(f"[Expand Rects] Rect #{i}: Starting from text box [{x1},{y1},{x2},{y2}] size={w}x{h}")
+        
+        # Iteratively expand rectangles đồng thời cả 4 hướng
+        for padding in range(padding_step, max_padding + 1, padding_step):
+            any_expanded = False
+            
+            for i in range(len(expanded_rects)):
+                rect = expanded_rects[i]
+                x1, y1, x2, y2 = rect
+                
+                # Try expand CẢ 4 HƯỚNG CÙNG LÚC
+                new_x1 = x1 - padding_step
+                new_y1 = y1 - padding_step
+                new_x2 = x2 + padding_step
+                new_y2 = y2 + padding_step
+                
+                # Constraint 1: Clamp to segment bounds
+                new_x1 = max(seg_x1, new_x1)
+                new_y1 = max(seg_y1, new_y1)
+                new_x2 = min(seg_x2, new_x2)
+                new_y2 = min(seg_y2, new_y2)
+                
+                # Skip if invalid dimensions
+                if new_x2 <= new_x1 or new_y2 <= new_y1:
+                    continue
+                
+                # Constraint 2: Check collision with other rectangles
+                can_expand = True
+                
+                for j in range(len(expanded_rects)):
+                    if i == j:
+                        continue
+                    
+                    other_rect = expanded_rects[j]
+                    ox1, oy1, ox2, oy2 = other_rect
+                    
+                    # Check if expanded rect would overlap or be too close
+                    if not (new_x2 + min_gap < ox1 or new_x1 > ox2 + min_gap or 
+                            new_y2 + min_gap < oy1 or new_y1 > oy2 + min_gap):
+                        can_expand = False
+                        break
+                
+                if not can_expand:
+                    continue
+                
+                # Constraint 3: Check if new rectangle is COMPLETELY inside mask
+                img_h, img_w = mask.shape[:2]
+                new_x1_clamped = max(0, min(img_w - 1, new_x1))
+                new_y1_clamped = max(0, min(img_h - 1, new_y1))
+                new_x2_clamped = max(0, min(img_w, new_x2))
+                new_y2_clamped = max(0, min(img_h, new_y2))
+                
+                if new_x2_clamped <= new_x1_clamped or new_y2_clamped <= new_y1_clamped:
+                    continue
+                
+                cropped_mask = mask[new_y1_clamped:new_y2_clamped, new_x1_clamped:new_x2_clamped]
+                
+                if cropped_mask.size == 0:
+                    continue
+                        # BƯỚC 1: Check 4 góc của rectangle phải nằm TRONG mask
+                corners_inside = True
+                corner_offsets = [(0, 0), (0, -1), (-1, 0), (-1, -1)]
+                
+                for dy, dx in corner_offsets:
+                    corner_y = new_y1_clamped if dy == 0 else new_y2_clamped - 1
+                    corner_x = new_x1_clamped if dx == 0 else new_x2_clamped - 1
+                    
+                    if corner_y < 0 or corner_y >= img_h or corner_x < 0 or corner_x >= img_w:
+                        corners_inside = False
+                        break
+                    
+                    if mask[corner_y, corner_x] == 0:
+                        corners_inside = False
+                        break
+                
+                if not corners_inside:
+                    continue
+                
+                # BƯỚC 2: Check 4 BIÊN có ít nhất 85% pixels trong mask
+                edges_valid = True
+                
+                # Top edge
+                if new_y1_clamped < img_h:
+                    top_edge = mask[new_y1_clamped, new_x1_clamped:new_x2_clamped]
+                    if len(top_edge) > 0:
+                        top_coverage = np.sum(top_edge > 0) / len(top_edge)
+                        if top_coverage < 0.85:
+                            edges_valid = False
+                
+                # Bottom edge
+                if edges_valid and new_y2_clamped > 0 and (new_y2_clamped - 1) < img_h:
+                    bottom_edge = mask[new_y2_clamped - 1, new_x1_clamped:new_x2_clamped]
+                    if len(bottom_edge) > 0:
+                        bottom_coverage = np.sum(bottom_edge > 0) / len(bottom_edge)
+                        if bottom_coverage < 0.85:
+                            edges_valid = False
+                
+                # Left edge
+                if edges_valid and new_x1_clamped < img_w:
+                    left_edge = mask[new_y1_clamped:new_y2_clamped, new_x1_clamped]
+                    if len(left_edge) > 0:
+                        left_coverage = np.sum(left_edge > 0) / len(left_edge)
+                        if left_coverage < 0.85:
+                            edges_valid = False
+                
+                # Right edge
+                if edges_valid and new_x2_clamped > 0 and (new_x2_clamped - 1) < img_w:
+                    right_edge = mask[new_y1_clamped:new_y2_clamped, new_x2_clamped - 1]
+                    if len(right_edge) > 0:
+                        right_coverage = np.sum(right_edge > 0) / len(right_edge)
+                        if right_coverage < 0.85:
+                            edges_valid = False
+                
+                if not edges_valid:
+                    continue
+                
+                # BƯỚC 3: Check toàn bộ rectangle có ít nhất 95% pixels trong mask
+                mask_coverage = np.sum(cropped_mask > 0) / (cropped_mask.size + 1e-6)
+                if mask_coverage < 0.95:
+                    continue
+                        
+                        # All constraints passed - apply expansion
+                expanded_rects[i] = [new_x1, new_y1, new_x2, new_y2]
+                any_expanded = True
+            
+            # Stop if no rectangle expanded in this iteration
+            if not any_expanded:
+                logger.info(f"[Expand Rects] Stopped at padding={padding}px (no more expansion possible)")
+                break
+        
+        # Convert back to [x, y, w, h] format
+        final_rectangles = []
+        for i, rect in enumerate(expanded_rects):
+            x1, y1, x2, y2 = rect
+            w = x2 - x1
+            h = y2 - y1
+            final_rectangles.append([x1, y1, w, h])
+            
+            orig_rect = rectangles[i]
+            orig_w, orig_h = orig_rect[2], orig_rect[3]
+            orig_area = orig_w * orig_h
+            new_area = w * h
+            growth_area = new_area - orig_area
+            growth_percent = (growth_area / max(orig_area, 1)) * 100
+            
+            logger.info(f"[Expand Rects] Rect #{i}: {orig_w}x{orig_h} ({orig_area}px²) → {w}x{h} ({new_area}px²) | Growth: +{growth_area}px² (+{growth_percent:.1f}%)")
+        
+        logger.info(f"[Expand Rects] CENTER-BASED expansion completed ✓")
+        
+        return final_rectangles
     
     def _create_step1_visualization(self, image: np.ndarray, segments: List[SegmentData], masks: List[np.ndarray]) -> np.ndarray:
         """

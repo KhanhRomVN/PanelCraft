@@ -9,6 +9,7 @@ from app.models.pipeline_models import ProcessingStep, ImageResult, SegmentData,
 from app.services.segmentation_service import SegmentationService
 from app.services.text_detection_service import TextDetectionService
 from app.services.ocr_service import OCRService
+from app.services.inpainting_service import InpaintingService
 from app.utils.image_utils import numpy_to_base64, save_temp_image
 from app.core.config import settings
 
@@ -20,6 +21,7 @@ class MangaPipelineService:
         self.segmentation_service = SegmentationService(model_base_path)
         self.text_detection_service = TextDetectionService(model_base_path)
         self.ocr_service = OCRService(model_base_path)
+        self.inpainting_service = InpaintingService(model_base_path)
         
     async def process_single_image(
         self, 
@@ -189,14 +191,15 @@ class MangaPipelineService:
                     # Filter scores tương ứng
                     text_scores_outside = all_text_scores[[i for i, box in enumerate(all_text_boxes) if any(np.array_equal(box, ob) for ob in text_boxes_outside)]]
                     
-                    text_outside_data, vis1_masks, vis2_black_canvas, vis3_filtered = await self.text_detection_service.process_text_outside_bubbles(
+                    text_outside_data, vis1_masks, vis2_black_canvas, vis3_filtered, vis4_filtered_masks, vis5_inpainted = await self.text_detection_service.process_text_outside_bubbles(
                         cleaned_image,
                         text_boxes_outside,
                         text_scores_outside,
-                        self.ocr_service
+                        self.ocr_service,
+                        self.inpainting_service
                     )
                     
-                    # Lưu 3 visualizations
+                    # Lưu 5 visualizations
                     if vis1_masks is not None:
                         vis1_path = save_temp_image(vis1_masks, "text_outside_vis1_masks")
                         vis1_url = f"/temp/{os.path.basename(vis1_path)}"
@@ -210,7 +213,17 @@ class MangaPipelineService:
                     if vis3_filtered is not None:
                         vis3_path = save_temp_image(vis3_filtered, "text_outside_vis3_filtered")
                         vis3_url = f"/temp/{os.path.basename(vis3_path)}"
-                        logger.info(f"[STEP2] Text Outside VIS 3 (Filtered boxes with OCR): {vis3_url}")                
+                        logger.info(f"[STEP2] Text Outside VIS 3 (Filtered boxes with OCR): {vis3_url}")
+                    
+                    if vis4_filtered_masks is not None:
+                        vis4_path = save_temp_image(vis4_filtered_masks, "text_outside_vis4_filtered_masks")
+                        vis4_url = f"/temp/{os.path.basename(vis4_path)}"
+                        logger.info(f"[STEP2] Text Outside VIS 4 (Filtered masks on cleaned image): {vis4_url}")
+                    
+                    if vis5_inpainted is not None:
+                        vis5_path = save_temp_image(vis5_inpainted, "text_outside_vis5_inpainted")
+                        vis5_url = f"/temp/{os.path.basename(vis5_path)}"
+                        logger.info(f"[STEP2] Text Outside VIS 5 (Inpainted result): {vis5_url}")                
                 
             if ProcessingStep.FULL_PIPELINE in steps or ProcessingStep.OCR in steps:
                 logger.info(f"[STEP3] ═══════════════════════════════════════════════════════")

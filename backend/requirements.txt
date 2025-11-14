@@ -1,8 +1,10 @@
+# python3.10.*
 fastapi
 uvicorn
 python-multipart
 opencv-python
-numpy
+numpy==1.23.5
+scikit-image==0.19.3
 onnxruntime
 manga-ocr
 Pillow
@@ -11,3 +13,10 @@ pydantic-settings
 aiofiles
 python-dotenv
 pyinstaller
+lama-cleaner
+setuptools-rust
+torch
+torchvision
+tokenizers
+huggingface_hub==0.19.4
+diffusers==0.24.0
