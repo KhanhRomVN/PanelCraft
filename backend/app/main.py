@@ -8,7 +8,7 @@ import shutil
 from typing import List, Optional
 import logging
 
-from app.api.endpoints import router as api_router
+from app.api.routers.processing import router as processing_router
 from app.core.config import settings
 from app.core.logging_config import setup_logging
 
@@ -38,7 +38,8 @@ app.add_middleware(
 )
 
 # Include API routes
-app.include_router(api_router, prefix="/api/v1")
+# Register routers (extendable: add more domain-specific routers here)
+app.include_router(processing_router, prefix="/api/v1")
 
 # Create temp directory
 temp_dir = os.path.abspath("temp")

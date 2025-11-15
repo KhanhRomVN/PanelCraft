@@ -6,6 +6,7 @@ import torch
 import logging
 from typing import Optional, Tuple
 from pathlib import Path
+from app.core import constants as C
 
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -14,6 +15,18 @@ warnings.filterwarnings("ignore", category=UserWarning)
 logger = logging.getLogger(__name__)
 
 class InpaintingService:
+    """
+    Service wrapper around the LaMa inpainting model.
+
+    Responsibilities:
+    - Load & patch lama-cleaner to force use of a local model file (avoid network).
+    - Provide high-level inpaint_text_regions with safety checks & preprocessing.
+    - Abstract device selection (CPU/CUDA) and configuration details.
+
+    Notes:
+    - Tunable thresholds & defaults defined in app.core.constants (INPAINT_*).
+    - Verbose logging retained for diagnostics; reduce levels for production.
+    """
     def __init__(self, model_base_path: str):
         self.model_base_path = model_base_path
         self.model = None
@@ -209,7 +222,7 @@ class InpaintingService:
         self,
         image: np.ndarray,
         mask: np.ndarray,
-        dilate_kernel_size: int = 5
+        dilate_kernel_size: int = C.INPAINT_DEFAULT_DILATE_KERNEL
     ) -> Optional[np.ndarray]:
         """
         Inpaint text regions using LaMa model
@@ -241,7 +254,7 @@ class InpaintingService:
             mask_pixels = np.sum(mask > 0)
             logger.info(f"[Inpainting] Mask coverage: {mask_coverage:.2f}% ({mask_pixels} pixels)")
             
-            if mask_coverage < 0.01:
+            if mask_coverage < C.INPAINT_MIN_MASK_COVERAGE_PERCENT:
                 logger.warning(f"[Inpainting] ✗ Mask coverage too low ({mask_coverage:.2f}%), skipping inpainting")
                 return image
             

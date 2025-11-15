@@ -7,6 +7,7 @@ import logging
 from app.utils.geometry_utils import filter_text_boxes_by_quality
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance
 from pathlib import Path
+from app.core import constants as C
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +138,7 @@ class TextDetectionService:
         im_h, im_w = canvas.shape[:2]
         
         # Preprocess
-        img_in, ratio, (dw, dh) = self._letterbox(canvas, new_shape=1024, stride=64)
+        img_in, ratio, (dw, dh) = self._letterbox(canvas, new_shape=C.TEXT_DET_LETTERBOX_SIZE, stride=C.TEXT_DET_LETTERBOX_STRIDE)
         
         # Convert to blob
         img_in = img_in.transpose((2, 0, 1))[::-1]
@@ -253,7 +254,7 @@ class TextDetectionService:
             im_h, im_w = image.shape[:2]
             
             # Preprocess
-            img_in, ratio, (dw, dh) = self._letterbox(image, new_shape=1024, stride=64)
+            img_in, ratio, (dw, dh) = self._letterbox(image, new_shape=C.TEXT_DET_LETTERBOX_SIZE, stride=C.TEXT_DET_LETTERBOX_STRIDE)
             
             # Convert to blob
             img_in = img_in.transpose((2, 0, 1))[::-1]
@@ -321,7 +322,7 @@ class TextDetectionService:
                 masked_region = np.where(mask_3ch > 0, cropped_region, 0)
                 
                 # Run text detection on masked region
-                img_in, ratio, (dw, dh) = self._letterbox(masked_region, new_shape=1024, stride=64)
+                img_in, ratio, (dw, dh) = self._letterbox(masked_region, new_shape=C.TEXT_DET_LETTERBOX_SIZE, stride=C.TEXT_DET_LETTERBOX_STRIDE)
                 
                 img_in = img_in.transpose((2, 0, 1))[::-1]
                 img_in = np.array([np.ascontiguousarray(img_in)]).astype(np.float32) / 255.0
@@ -447,7 +448,7 @@ class TextDetectionService:
             im_h, im_w = image.shape[:2]
             
             # CHẠY TEXT DETECTION TRỰC TIẾP TRÊN CLEANED IMAGE
-            img_in, ratio, (dw, dh) = self._letterbox(image, new_shape=1024, stride=64)
+            img_in, ratio, (dw, dh) = self._letterbox(image, new_shape=C.TEXT_DET_LETTERBOX_SIZE, stride=C.TEXT_DET_LETTERBOX_STRIDE)
             
             img_in = img_in.transpose((2, 0, 1))[::-1]
             img_in = np.array([np.ascontiguousarray(img_in)]).astype(np.float32) / 255.0
@@ -463,11 +464,11 @@ class TextDetectionService:
             
             boxes_from_mask = self._extract_boxes_from_mask(
                 mask,
-                min_area=200,
-                max_area=50000,
-                min_aspect_ratio=0.1,
-                max_aspect_ratio=20.0,
-                min_solidity=0.4,
+                min_area=C.TEXT_DET_BOX_MIN_AREA * 2,  # outside bubbles use stricter min (example adjustment)
+                max_area=C.TEXT_DET_BOX_MAX_AREA,
+                min_aspect_ratio=C.TEXT_DET_BOX_MIN_ASPECT,
+                max_aspect_ratio=C.TEXT_DET_BOX_MAX_ASPECT,
+                min_solidity=C.TEXT_DET_BOX_MIN_SOLIDITY + 0.1,  # slightly higher for outside regions
                 merge_kernel_size=3
             )
             
@@ -477,7 +478,7 @@ class TextDetectionService:
             if len(boxes_from_mask) > 0:
                 boxes_from_mask = self._merge_nearby_boxes(
                     boxes_from_mask,
-                    distance_threshold=50,
+                    distance_threshold=C.TEXT_DET_MERGE_DISTANCE_THRESHOLD,
                     direction="both"
                 )
             
@@ -485,7 +486,7 @@ class TextDetectionService:
             if len(boxes_from_mask) > 0:
                 boxes_from_mask = self._filter_overlapping_boxes(
                     boxes_from_mask,
-                    iou_threshold=0.7
+                    iou_threshold=C.TEXT_DET_OVERLAP_IOU_THRESHOLD
                 )
             
             logger.info(f"[Text Outside] Final boxes after merge & filter: {len(boxes_from_mask)}")
@@ -941,7 +942,7 @@ class TextDetectionService:
         
         return img, (r, r), (dw, dh)
     
-    def _non_max_suppression_text(self, prediction, conf_thres=0.25, iou_thres=0.35):
+    def _non_max_suppression_text(self, prediction, conf_thres=C.TEXT_DET_NMS_CONF_THRESHOLD, iou_thres=C.TEXT_DET_NMS_IOU_THRESHOLD):
         """NMS for text detection"""
         output = [None] * len(prediction)
         
@@ -994,7 +995,7 @@ class TextDetectionService:
         elif len(mask.shape) == 3:
             mask = mask[0]
         
-        mask = (mask > 0.3) * 255
+        mask = (mask > C.TEXT_DET_MASK_BIN_THRESHOLD) * 255
         mask = mask.astype(np.uint8)
         
         # Remove padding
@@ -1128,7 +1129,7 @@ class TextDetectionService:
     def _merge_nearby_boxes(
         self,
         boxes: np.ndarray,
-        distance_threshold: int = 50,
+        distance_threshold: int = C.TEXT_DET_MERGE_DISTANCE_THRESHOLD,
         direction: str = "both"
     ) -> np.ndarray:
         """
@@ -1219,7 +1220,7 @@ class TextDetectionService:
     def _filter_overlapping_boxes(
         self,
         boxes: np.ndarray,
-        iou_threshold: float = 0.7
+        iou_threshold: float = C.TEXT_DET_OVERLAP_IOU_THRESHOLD
     ) -> np.ndarray:
         """
         Filter boxes overlap - giữ box lớn hơn, loại box nhỏ bị overlap

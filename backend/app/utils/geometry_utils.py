@@ -3,7 +3,7 @@ import cv2
 from typing import List, Tuple, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from app.models.pipeline_models import SegmentData
+    from app.schemas.pipeline import SegmentData
 
 def find_largest_inscribed_rectangle(mask: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
     """

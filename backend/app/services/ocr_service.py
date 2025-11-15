@@ -3,7 +3,7 @@ import numpy as np
 from typing import List, Optional, Tuple
 import logging
 
-from app.models.pipeline_models import SegmentData, OCRResult
+from app.schemas.pipeline import SegmentData, OCRResult
 
 logger = logging.getLogger(__name__)
 

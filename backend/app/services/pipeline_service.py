@@ -5,7 +5,7 @@ import uuid
 from typing import List, Dict, Any, Optional
 import logging
 
-from app.models.pipeline_models import ProcessingStep, ImageResult, SegmentData, OCRResult
+from app.schemas.pipeline import ProcessingStep, ImageResult, SegmentData, OCRResult
 from app.services.segmentation_service import SegmentationService
 from app.services.text_detection_service import TextDetectionService
 from app.services.ocr_service import OCRService

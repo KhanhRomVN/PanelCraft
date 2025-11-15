@@ -1,49 +1,39 @@
 # app/models/pipeline_models.py
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any, Tuple
-from enum import Enum
+"""
+DEPRECATED MODULE (Re-export only)
 
-class ProcessingStep(str, Enum):
-    SEGMENTATION = "segmentation"
-    TEXT_DETECTION = "text_detection"
-    OCR = "ocr"
-    FULL_PIPELINE = "full_pipeline"
+Original duplicated Pydantic models have been consolidated into:
+    app/schemas/pipeline.py
 
-class SegmentData(BaseModel):
-    id: int
-    box: List[int]  # [x1, y1, x2, y2]
-    score: float
-    rectangles: List[List[int]] = []  # THAY ĐỔI: List of rectangles [x, y, w, h]
+This module now only re-exports the unified schema symbols for backward
+compatibility. Prefer importing from `app.schemas.pipeline` in all new code.
 
-class OCRResult(BaseModel):
-    segment_id: int
-    original_text: str
-    confidence: float = 0.0
+Example (old code):
+    from app.models.pipeline_models import PipelineRequest
 
-class PipelineRequest(BaseModel):
-    image_paths: List[str]
-    model_base_path: str
-    steps: List[ProcessingStep] = [ProcessingStep.FULL_PIPELINE]
-    options: Optional[Dict[str, Any]] = None
+Recommended (new code):
+    from app.schemas.pipeline import PipelineRequest
 
-class PipelineResponse(BaseModel):
-    success: bool
-    message: str
-    data: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
+Remove legacy imports gradually and then delete this file if no longer needed.
+"""
 
-class ImageResult(BaseModel):
-    image_index: int
-    original_path: str
-    original_dimensions: Tuple[int, int]  # (width, height)
-    cleaned_text_result: Optional[str] = None  # URL ảnh đã clean text
-    segments: List[SegmentData] = []  # Segments với rectangles để Frontend vẽ outline
-    rectangles: List[dict] = []  # THÊM: List rectangles metadata cho Frontend
-    ocr_results: List[OCRResult] = []
+from __future__ import annotations
+from app.schemas.pipeline import (
+    ProcessingStep,
+    SegmentData,
+    OCRResult,
+    PipelineRequest,
+    ImageResult,
+    PipelineResponse,
+    BatchResponse,
+)
 
-class BatchResponse(BaseModel):
-    request_id: str
-    status: str  # processing, completed, error
-    results: List[ImageResult] = []
-    total_images: int
-    processed_images: int
+__all__ = [
+    "ProcessingStep",
+    "SegmentData",
+    "OCRResult",
+    "PipelineRequest",
+    "ImageResult",
+    "PipelineResponse",
+    "BatchResponse",
+]

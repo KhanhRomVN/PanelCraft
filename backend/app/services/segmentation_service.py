@@ -5,8 +5,9 @@ import onnxruntime as ort
 from typing import List, Tuple, Optional
 import logging
 
-from app.models.pipeline_models import SegmentData
+from app.schemas.pipeline import SegmentData
 from app.utils.geometry_utils import find_largest_inscribed_rectangle, apply_nms, filter_segments_by_quality
+from app.core import constants as C
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,7 @@ class SegmentationService:
     
     def _preprocess(self, image: np.ndarray) -> Tuple[np.ndarray, float, int, int]:
         """Preprocess image for segmentation model"""
-        input_size = 640
+        input_size = C.SEGMENTATION_INPUT_SIZE
         orig_h, orig_w = image.shape[:2]
         
         # Calculate scale
@@ -111,7 +112,7 @@ class SegmentationService:
         mask_coeffs = boxes_output[:, 5:]
         
         # Filter by confidence
-        conf_threshold = 0.5
+        conf_threshold = C.SEGMENTATION_CONF_THRESHOLD
         valid_mask = (class_scores.squeeze() >= conf_threshold)
         if not np.any(valid_mask):
             return [], []
@@ -121,7 +122,7 @@ class SegmentationService:
         valid_mask_coeffs = mask_coeffs[valid_mask]
         
         # Apply NMS
-        nms_indices = apply_nms(valid_boxes, valid_scores.squeeze(), iou_threshold=0.45)
+        nms_indices = apply_nms(valid_boxes, valid_scores.squeeze(), iou_threshold=C.SEGMENTATION_IOU_THRESHOLD)
         if len(nms_indices) == 0:
             return [], []
         
@@ -168,7 +169,7 @@ class SegmentationService:
             # Cắt phần padding và resize về kích thước gốc
             mask_no_pad = mask_resized_640[pad_h:pad_h+new_h, pad_w:pad_w+new_w]
             mask_original_size = cv2.resize(mask_no_pad, (original_w, original_h), interpolation=cv2.INTER_LINEAR)
-            mask_binary = (mask_original_size > 0.3).astype(np.uint8)
+            mask_binary = (mask_original_size > C.SEGMENTATION_MASK_THRESHOLD).astype(np.uint8)
             
             # Find contours to get bounding box
             contours, _ = cv2.findContours(mask_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
