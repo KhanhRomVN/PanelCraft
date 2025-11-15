@@ -128,8 +128,6 @@ class ImageProcessingPipelineService:
         steps = steps or [ProcessingStep.FULL_PIPELINE]
         options = options or {}
 
-        logger.info("[Pipeline] Starting processing for: %s", image_path)
-
         image_bgr = cv2.imread(image_path)
         if image_bgr is None:
             raise ValueError(f"Failed to load image: {image_path}")
@@ -173,14 +171,13 @@ class ImageProcessingPipelineService:
         self, ctx: ProcessingContext, result: ImageResult
     ) -> None:
         """Execute segmentation step & store segments/masks + visualization."""
-        logger.info("[STEP1] ═════════ SEGMENTATION ═════════")
+        logger.info("═══════════════════════════ [STEP1] - BUBBLES SEGMENTATION ═══════════════════════════")
         segments, _vis_placeholder, masks = await self.segmentation_service.process(
             ctx.image_rgb
         )
         ctx.segments = segments
         ctx.masks = masks
         result.segments = segments
-        logger.info("[STEP1] Segments detected: %d", len(segments))
 
         # Visualization (boundaries only)
         vis_boundaries = self.segmentation_service._create_step1_visualization(
@@ -189,14 +186,14 @@ class ImageProcessingPipelineService:
         step1_vis_path = save_temp_image(vis_boundaries, "step1_boundaries")
         step1_vis_url = f"/temp/{os.path.basename(step1_vis_path)}"
         ctx.visualizations["step1_boundaries"] = step1_vis_url
-        logger.info("[STEP1] Visualization (boundaries): %s", step1_vis_url)
-        logger.info("[STEP1] Completed ✓")
+        logger.info("Bubble Segmentation(Boundaries): %s", step1_vis_url)
 
     async def _run_text_detection(
         self, ctx: ProcessingContext, result: ImageResult
     ) -> None:
         """Execute text detection, rectangle refinement, cleaning, and outside text processing."""
-        logger.info("[STEP2] ═════════ TEXT DETECTION ═════════")
+        logger.info("═══════════════════════════ [STEP2] - BUBBLES TEXTS DETECTION AND RECTANGLE CALCULATED ═══════════════════════════")
+        
         if not ctx.segments or not ctx.masks:
             logger.warning("[STEP2] Skipping text detection (no segments)")
             return
@@ -213,7 +210,6 @@ class ImageProcessingPipelineService:
             ctx.image_rgb, segments_with_mask
         )
         ctx.text_boxes_per_segment = text_boxes_per_segment
-        logger.info("[STEP2] Per-segment text detection complete")
 
         # Rectangle refinement
         refined_segments = self.segmentation_service.calculate_rectangles_with_text_boxes(
@@ -247,10 +243,6 @@ class ImageProcessingPipelineService:
         )
         ctx.all_text_boxes = all_text_boxes
         ctx.all_text_scores = all_text_scores
-        logger.info(
-            "[STEP2] Global text boxes detected: %d",
-            len(all_text_boxes),
-        )
 
         # Clean text inside bubbles
         cleaned_image, blank_canvas_vis, text_vis = await self.text_detection_service.process_segments(

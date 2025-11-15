@@ -136,7 +136,6 @@ def save_temp_image(image: np.ndarray, prefix: str = "image") -> str:
         if not cv2.imwrite(filepath, image_bgr):
             raise RuntimeError(f"cv2.imwrite failed for path: {filepath}")
 
-        logger.debug("[image_utils] Saved temp image: %s", filepath)
         return filepath
     except Exception as e:  # noqa: BLE001
         logger.error(f"[image_utils] save_temp_image error: {e}")

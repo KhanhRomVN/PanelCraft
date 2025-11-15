@@ -97,8 +97,6 @@ def setup_logging(
         uv_logger.setLevel(target_level)
 
     root_logger._app_logging_configured = True  # type: ignore[attr-defined]
-    root_logger.debug("Logging initialized (level=%s, json=%s, compact_console=%s)",
-                      logging.getLevelName(target_level), json, compact_console)
     return root_logger
 
 

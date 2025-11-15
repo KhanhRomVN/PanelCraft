@@ -190,7 +190,6 @@ class TextDetectionService:
             List of arrays of shape (Mi, 4) each for global coordinates of boxes in segment i.
         """
         self._assert_model_loaded()
-        logger.info(f"[TextDet] Detecting segment-local text in {len(segments)} segments")
 
         results: List[np.ndarray] = []
         for idx, segment in enumerate(segments):

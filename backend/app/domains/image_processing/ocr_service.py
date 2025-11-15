@@ -62,7 +62,6 @@ class OCRService:
         try:
             from manga_ocr import MangaOcr  # Lazy import
             self.ocr_model = MangaOcr()
-            logger.info("[OCR] Model loaded")
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[OCR] MangaOcr unavailable, degraded mode active: {e}")
             self.ocr_model = None

@@ -299,9 +299,7 @@ class SegmentationService:
         Returns:
             Updated list of SegmentData with rectangles populated.
         """
-        logger.info(
-            f"[Rectangles] Calculating rectangles for {len(segments)} segments"
-        )
+        
         updated_segments: List[SegmentData] = []
 
         for idx, seg in enumerate(segments):
@@ -317,9 +315,6 @@ class SegmentationService:
             rectangles: List[List[int]] = []
 
             if num_boxes >= 2:
-                logger.info(
-                    f"[Rectangles] Segment #{seg.id}: Multiple text boxes -> {num_boxes} initial rectangles"
-                )
                 for tb_idx, tb in enumerate(text_boxes):
                     tb_x1, tb_y1, tb_x2, tb_y2 = tb
                     tb_w = tb_x2 - tb_x1
@@ -360,7 +355,6 @@ class SegmentationService:
                 )
             )
 
-        logger.info("[Rectangles] Completed rectangle calculation")
         return updated_segments
 
     def _expand_rectangles_with_constraints(
