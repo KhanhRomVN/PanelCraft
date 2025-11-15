@@ -12,13 +12,13 @@ Example (old code):
     from app.models.pipeline_models import PipelineRequest
 
 Recommended (new code):
-    from app.api.schemas.pipeline import PipelineRequest
+    from app.schemas.pipeline import PipelineRequest
 
 Remove legacy imports gradually and then delete this file if no longer needed.
 """
 
 from __future__ import annotations
-from app.api.schemas.pipeline import (
+from app.schemas.pipeline import (
     ProcessingStep,
     SegmentData,
     OCRResult,

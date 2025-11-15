@@ -1,16 +1,15 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 import os
-import shutil
-from typing import List, Optional
 import logging
 
-from app.api.routers.processing import router as processing_router
-from app.core.config import settings
-from app.core.logging_config import setup_logging
+from app.shared.exceptions import BaseAppError
+
+from app.api.routes.processing import router as processing_router
+from app.config.settings import settings
+from app.config.logging import setup_logging
 
 # Setup logging
 setup_logging()
@@ -41,8 +40,13 @@ app.add_middleware(
 # Register routers (extendable: add more domain-specific routers here)
 app.include_router(processing_router, prefix="/api/v1")
 
-# Create temp directory
-temp_dir = os.path.abspath("temp")
+# Exception handlers
+@app.exception_handler(BaseAppError)
+async def app_error_handler(request: Request, exc: BaseAppError):
+    return exc.to_response()
+
+# Create temp directory using settings.TEMP_DIR
+temp_dir = os.path.abspath(settings.TEMP_DIR)
 os.makedirs(temp_dir, exist_ok=True)
 
 # Verify temp directory exists and is writable
@@ -51,8 +55,13 @@ if not os.path.exists(temp_dir):
 if not os.access(temp_dir, os.W_OK):
     raise RuntimeError(f"Temp directory is not writable: {temp_dir}")
 
-print(f"[Server] Temp directory: {temp_dir}")
+logger.info("[Server] Temp directory: %s", temp_dir)
 app.mount("/temp", StaticFiles(directory=temp_dir), name="temp")
+
+@app.on_event("startup")
+async def on_startup():
+    logger.info("[Startup] Application starting (debug=%s)", settings.DEBUG)
+    logger.info("[Startup] Temp directory mounted at /temp -> %s", temp_dir)
 
 @app.get("/")
 async def root():
