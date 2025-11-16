@@ -171,7 +171,7 @@ class ImageProcessingPipelineService:
         self, ctx: ProcessingContext, result: ImageResult
     ) -> None:
         """Execute segmentation step & store segments/masks + visualization."""
-        logger.info("═══════════════════════════ [STEP1] - BUBBLES SEGMENTATION ═══════════════════════════")
+        logger.info("═════════════════ [STEP1] - BUBBLES SEGMENTATION ═════════════════")
         segments, _vis_placeholder, masks = await self.segmentation_service.process(
             ctx.image_rgb
         )
@@ -186,13 +186,13 @@ class ImageProcessingPipelineService:
         step1_vis_path = save_temp_image(vis_boundaries, "step1_boundaries")
         step1_vis_url = f"/temp/{os.path.basename(step1_vis_path)}"
         ctx.visualizations["step1_boundaries"] = step1_vis_url
-        logger.info("Bubble Segmentation(Boundaries): %s", step1_vis_url)
+        logger.info("[STEP] Bubble Segmentation(Boundaries): %s", step1_vis_url)
 
     async def _run_text_detection(
         self, ctx: ProcessingContext, result: ImageResult
     ) -> None:
         """Execute text detection, rectangle refinement, cleaning, and outside text processing."""
-        logger.info("═══════════════════════════ [STEP2] - BUBBLES TEXTS DETECTION AND RECTANGLE CALCULATED ═══════════════════════════")
+        logger.info("═════════════════ [STEP2] - BUBBLES TEXTS DETECTION AND RECTANGLE CALCULATED ═════════════════")
         
         if not ctx.segments or not ctx.masks:
             logger.warning("[STEP2] Skipping text detection (no segments)")
@@ -262,14 +262,14 @@ class ImageProcessingPipelineService:
             ctx.visualizations["cleaned_text"] = result.cleaned_text_result
 
         logger.info(
-            "[STEP2] Visualization 1 (Blank canvas): %s",
+            "[STEP2] [INSIDE BUBBLE] Use Black Canvas (Use From Step1) %s",
             ctx.visualizations["step2_blank_canvas"],
         )
         logger.info(
-            "[STEP2] Visualization 2 (Text masks + boxes): %s",
+            "[STEP2] [INSIDE BUBBLE] Apply Text Masks And Caculated Boxes: %s",
             ctx.visualizations["step2_text_masks"],
         )
-        logger.info("[STEP2] Cleaned image: %s", result.cleaned_text_result)
+        logger.info("[STEP2] [INSIDE BUBBLE] Clean Texts And Return To Background: %s", result.cleaned_text_result)
 
         # Rectangles overlay visualization (after refinement)
         try:
@@ -279,7 +279,7 @@ class ImageProcessingPipelineService:
             step2_vis3_path = save_temp_image(vis_rectangles, "step2_rectangles")
             ctx.visualizations["step2_rectangles"] = f"/temp/{os.path.basename(step2_vis3_path)}"
             logger.info(
-                "[STEP2] Visualization 3 (Rectangles overlay): %s",
+                "[STEP2] Final Calculated Rectangle: %s",
                 ctx.visualizations["step2_rectangles"],
             )
         except Exception as e:  # noqa: BLE001
@@ -290,10 +290,6 @@ class ImageProcessingPipelineService:
             all_text_boxes, all_text_scores, refined_segments
         )
         ctx.text_boxes_outside = text_boxes_outside
-        logger.info(
-            "[STEP2] Text boxes outside bubbles: %d",
-            len(text_boxes_outside),
-        )
 
         # Process outside bubble text (only if we have cleaned image)
         if len(text_boxes_outside) > 0 and cleaned_image is not None:
@@ -319,33 +315,29 @@ class ImageProcessingPipelineService:
                 self.inpainting_service,
             )
 
-            # Persist visualizations
-            def _persist_vis(arr: np.ndarray, key: str) -> None:
+                        # Persist visualizations
+            def _persist_vis(arr: np.ndarray, file_prefix: str, display_name: str) -> None:
                 if arr is None:
                     return
-                p = save_temp_image(arr, key)
-                ctx.visualizations[key] = f"/temp/{os.path.basename(p)}"
-                logger.info("[STEP2] %s: %s", key, ctx.visualizations[key])
+                p = save_temp_image(arr, file_prefix)
+                ctx.visualizations[file_prefix] = f"/temp/{os.path.basename(p)}"
+                logger.info("[STEP2] %s: %s", display_name, ctx.visualizations[file_prefix])
 
-            _persist_vis(vis1_masks, "text_outside_vis1_masks")
-            _persist_vis(vis2_black_canvas, "text_outside_vis2_black_canvas")
-            _persist_vis(vis3_filtered, "text_outside_vis3_filtered")
-            _persist_vis(vis4_filtered_masks, "text_outside_vis4_filtered_masks")
-            _persist_vis(vis5_inpainted, "text_outside_vis5_inpainted")
-
-        logger.info("[STEP2] Completed ✓")
+            _persist_vis(vis1_masks, "outside_text_masks", "[OUTSIDE] Apply Text Masks")
+            _persist_vis(vis2_black_canvas, "outside_black_canvas", "[OUTSIDE] Use Black Canvas")
+            _persist_vis(vis3_filtered, "outside_filtered_boxes", "[OUTSIDE] Apply Filter To Add Boxes Filter")
+            _persist_vis(vis4_filtered_masks, "outside_filtered_masks", "[OUTSIDE] Remove Text Mask Filter Boxes And Return To Background")
+            _persist_vis(vis5_inpainted, "outside_inpainted", "[OUTSIDE] Clean Text Mask Using InPainting")
 
     async def _run_ocr(self, ctx: ProcessingContext, result: ImageResult) -> None:
         """Execute OCR over bubble segments."""
-        logger.info("[STEP3] ═════════ OCR ═════════")
+        logger.info("═════════════════ [STEP3] OCR ═════════════════")
         if not ctx.segments:
             logger.info("[STEP3] No segments; skipping OCR")
             return
 
         ocr_results = await self.ocr_service.process_segments(ctx.image_rgb, ctx.segments)
         result.ocr_results = ocr_results
-        logger.info("[STEP3] OCR results: %d segments", len(ocr_results))
-        logger.info("[STEP3] Completed ✓")
 
 
 __all__ = ["ImageProcessingPipelineService"]

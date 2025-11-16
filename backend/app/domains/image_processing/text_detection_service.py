@@ -280,7 +280,6 @@ class TextDetectionService:
                 outside.append([bx1, by1, bx2, by2])
 
         result = np.array(outside) if outside else np.array([])
-        logger.info(f"[TextDet] Outside boxes: {len(all_boxes)} -> {len(result)}")
         return result
 
     async def process_text_outside_bubbles(

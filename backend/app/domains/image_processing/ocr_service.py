@@ -340,10 +340,8 @@ class OCRService:
                 return "[OCR ERROR]"
 
             h, w = image.shape[:2]
-            logger.debug(f"[OCR] Crop size: {w}x{h}")
             pil_image = Image.fromarray(image)
             text = self.ocr_model(pil_image)
-            logger.debug(f"[OCR] Text length: {len(text)}")
             return text
         except Exception as e:  # noqa: BLE001
             logger.error(f"[OCR] Exception: {e}")

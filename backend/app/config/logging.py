@@ -1,11 +1,10 @@
 import logging
 import sys
-from logging.handlers import RotatingFileHandler
 from typing import Optional
 
 
-DEFAULT_LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(funcName)s:%(lineno)d | %(message)s"
-COMPACT_LOG_FORMAT = "%(levelname)s: %(message)s"
+DEFAULT_LOG_FORMAT = "[%(pathname)s:%(lineno)d] [%(levelname)s] %(message)s"
+COMPACT_LOG_FORMAT = "[%(levelname)s] - %(message)s"
 
 
 def _get_log_level() -> int:
@@ -23,10 +22,6 @@ def _get_log_level() -> int:
 def setup_logging(
     *,
     level: Optional[int] = None,
-    json: bool = False,
-    file_path: str = "app.log",
-    max_bytes: int = 5 * 1024 * 1024,
-    backup_count: int = 3,
     compact_console: bool = False,
 ) -> logging.Logger:
     """
@@ -34,17 +29,12 @@ def setup_logging(
 
     Features:
     - Idempotent (safe to call multiple times without duplicating handlers)
-    - Rotating file handler (size-based)
-    - Optional JSON-style minimal logging (no external dependency)
+    - Colored console output with shortened paths
     - Optional compact console output
     - Integrates uvicorn loggers to use unified format
 
     Args:
         level: Explicit base log level (overrides auto-detected).
-        json: If True, emit simplified JSON lines for file handler.
-        file_path: Path for rotating file logs.
-        max_bytes: Max size before rotation.
-        backup_count: Number of rotated backups retained.
         compact_console: Use a minimal console format.
 
     Returns:
@@ -58,32 +48,19 @@ def setup_logging(
     if getattr(root_logger, "_app_logging_configured", False):
         return root_logger
 
-    # Formatter(s)
+    # Formatter
     if compact_console:
-        console_formatter = logging.Formatter(COMPACT_LOG_FORMAT)
+        console_formatter = _ColoredFormatter(COMPACT_LOG_FORMAT)
     else:
-        console_formatter = logging.Formatter(DEFAULT_LOG_FORMAT, "%Y-%m-%d %H:%M:%S")
-
-    if json:
-        file_formatter = _JsonLogFormatter()
-    else:
-        file_formatter = logging.Formatter(DEFAULT_LOG_FORMAT, "%Y-%m-%d %H:%M:%S")
+        console_formatter = _ColoredFormatter(DEFAULT_LOG_FORMAT)
 
     # Console handler (stdout)
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(target_level)
     console_handler.setFormatter(console_formatter)
 
-    # Rotating file handler
-    file_handler = RotatingFileHandler(
-        file_path, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8"
-    )
-    file_handler.setLevel(target_level)
-    file_handler.setFormatter(file_formatter)
-
-    # Attach handlers
+    # Attach handler
     root_logger.addHandler(console_handler)
-    root_logger.addHandler(file_handler)
 
     # Tune noisy third-party loggers if needed
     for noisy in ["urllib3", "asyncio", "PIL"]:
@@ -99,25 +76,45 @@ def setup_logging(
     root_logger._app_logging_configured = True  # type: ignore[attr-defined]
     return root_logger
 
-
-class _JsonLogFormatter(logging.Formatter):
+class _ColoredFormatter(logging.Formatter):
     """
-    Minimal JSON formatter (no external packages).
-    Produces one JSON object per line for easier ingestion.
+    Formatter with color support for console output.
     """
+    # ANSI color codes
+    COLORS = {
+        'DEBUG': '\033[36m',      # Cyan
+        'INFO': '\033[32m',       # Green
+        'WARNING': '\033[33m',    # Yellow
+        'ERROR': '\033[31m',      # Red
+        'CRITICAL': '\033[35m',   # Magenta
+    }
+    RESET = '\033[0m'
+    
     def format(self, record: logging.LogRecord) -> str:
-        import json
-        base = {
-            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
-            "level": record.levelname,
-            "logger": record.name,
-            "msg": record.getMessage(),
-            "func": record.funcName,
-            "line": record.lineno,
-        }
-        if record.exc_info:
-            base["exception"] = self.formatException(record.exc_info)
-        return json.dumps(base, ensure_ascii=False)
-
+        # Shorten the pathname
+        original_pathname = record.pathname
+        try:
+            import os
+            cwd = os.getcwd()
+            if record.pathname.startswith(cwd):
+                record.pathname = os.path.relpath(record.pathname, cwd)
+            if record.pathname.startswith('app/'):
+                record.pathname = record.pathname[4:]
+        except Exception:
+            pass
+        
+        # Add color to levelname
+        original_levelname = record.levelname
+        color = self.COLORS.get(record.levelname, '')
+        if color:
+            record.levelname = f"{color}{record.levelname}{self.RESET}"
+        
+        result = super().format(record)
+        
+        # Restore originals
+        record.pathname = original_pathname
+        record.levelname = original_levelname
+        
+        return result
 
 __all__ = ["setup_logging"]

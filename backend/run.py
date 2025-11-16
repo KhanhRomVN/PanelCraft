@@ -4,7 +4,7 @@ Run script for the manga processing backend
 """
 import uvicorn
 from app.main import app
-from app.core.config import settings
+from app.config.settings import settings
 
 if __name__ == "__main__":
     uvicorn.run(
