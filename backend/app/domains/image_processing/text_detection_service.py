@@ -83,7 +83,6 @@ class TextDetectionService:
 
         try:
             self.model = cv2.dnn.readNetFromONNX(model_path)
-            logger.info("[TextDet] Model loaded")
         except Exception as e:  # noqa: BLE001
             logger.error(f"[TextDet] Failed to load text detection model: {e}")
             raise RuntimeError(f"Failed to load text detection model: {e}") from e
@@ -301,7 +300,8 @@ class TextDetectionService:
                 vis2_black_canvas,
                 vis3_filtered_boxes,
                 vis4_filtered_masks,
-                vis5_inpainted_result
+                vis5_calculated_rectangle,
+                vis6_inpainted_result
             )
         """
         self._assert_model_loaded()
@@ -355,21 +355,45 @@ class TextDetectionService:
                 image.copy(), global_mask, boxes_from_mask, filtered_indices
             )
 
-            # VIS 5: Optional inpainting
+
+            # VIS 5: Inherit filtered boxes directly (no aggregation into single rectangle)
+            accepted_boxes = (
+                boxes_from_mask[filtered_indices] if filtered_indices and len(boxes_from_mask) > 0 else np.array([])
+            )
+            vis5_rectangle = image.copy()
+            if len(accepted_boxes) > 0:
+                for b in accepted_boxes:
+                    x1, y1, x2, y2 = map(int, b)
+                    cv2.rectangle(vis5_rectangle, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                    cv2.putText(
+                        vis5_rectangle,
+                        "BOX",
+                        (x1, max(0, y1 - 10)),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0, 255, 0),
+                        2,
+                        cv2.LINE_AA,
+                    )
+            # Build outside metadata (list of box dicts) for downstream final result overlay
+            outside_metadata = [{"box": [int(b[0]), int(b[1]), int(b[2]), int(b[3])]} for b in accepted_boxes] if len(accepted_boxes) > 0 else []
+
+            # VIS 6: Optional inpainting (renamed from vis5_inpainted)
             if inpainting_service and filtered_mask is not None:
-                vis5_inpainted = await inpainting_service.inpaint_text_regions(
+                vis6_inpainted = await inpainting_service.inpaint_text_regions(
                     image.copy(), filtered_mask, dilate_kernel_size=5
                 )
             else:
-                vis5_inpainted = image.copy()
+                vis6_inpainted = image.copy()
 
             return (
-                [],  # metadata placeholder for outside text results
+                outside_metadata,
                 vis1_masks,
                 vis2_black_canvas,
                 vis3_filtered,
                 vis4_filtered_masks,
-                vis5_inpainted,
+                vis5_rectangle,
+                vis6_inpainted,
             )
         except Exception as e:  # noqa: BLE001
             logger.error(f"[TextDet] process_text_outside_bubbles error: {e}")

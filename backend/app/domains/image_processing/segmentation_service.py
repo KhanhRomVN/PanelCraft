@@ -69,7 +69,6 @@ class SegmentationService:
             self.session = ort.InferenceSession(
                 model_path, providers=["CPUExecutionProvider"]
             )
-            logger.info("[Segmentation] Model loaded")
         except Exception as e:  # noqa: BLE001
             logger.error(f"[Segmentation] Failed to load model: {e}")
             raise RuntimeError(f"Failed to load segmentation model: {e}") from e

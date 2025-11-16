@@ -70,6 +70,7 @@ class ProcessingContext:
         all_text_boxes: Global text boxes across entire image.
         all_text_scores: Confidence scores for global text boxes.
         text_boxes_outside: Global text boxes outside bubble segments.
+        outside_final_boxes: Accepted outside boxes metadata (after filtering) for combined final result & OCR.
     """
     image_rgb: Optional[np.ndarray] = None
     segments: List[SegmentData] = field(default_factory=list)
@@ -81,6 +82,7 @@ class ProcessingContext:
     all_text_boxes: np.ndarray = field(default_factory=lambda: np.array([]))
     all_text_scores: np.ndarray = field(default_factory=lambda: np.array([]))
     text_boxes_outside: np.ndarray = field(default_factory=lambda: np.array([]))
+    outside_final_boxes: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class ImageProcessingPipelineService:
@@ -279,9 +281,42 @@ class ImageProcessingPipelineService:
             step2_vis3_path = save_temp_image(vis_rectangles, "step2_rectangles")
             ctx.visualizations["step2_rectangles"] = f"/temp/{os.path.basename(step2_vis3_path)}"
             logger.info(
-                "[STEP2] Final Calculated Rectangle: %s",
+                "[STEP2] [INSIDE BUBBLE] Final Calculated Rectangle: %s",
                 ctx.visualizations["step2_rectangles"],
             )
+            # Generate combined INSIDE BUBBLE final result (cleaned text + rectangles)
+            try:
+                if cleaned_image is not None:
+                    inside_final = cleaned_image.copy()
+                    for seg in refined_segments:
+                        for rect in getattr(seg, "rectangles", []):
+                            if len(rect) == 4:
+                                x, y, w, h = rect
+                                cv2.rectangle(
+                                    inside_final,
+                                    (x, y),
+                                    (x + w, y + h),
+                                    (0, 255, 0),
+                                    3,
+                                )
+                                cv2.putText(
+                                    inside_final,
+                                    "RECT",
+                                    (x, max(0, y - 10)),
+                                    cv2.FONT_HERSHEY_SIMPLEX,
+                                    0.7,
+                                    (0, 255, 0),
+                                    2,
+                                    cv2.LINE_AA,
+                                )
+                    inside_final_path = save_temp_image(inside_final, "inside_final_result")
+                    ctx.visualizations["inside_final_result"] = f"/temp/{os.path.basename(inside_final_path)}"
+                    logger.info(
+                        "[STEP2] [INSIDE BUBBLE] Final Result: %s",
+                        ctx.visualizations["inside_final_result"],
+                    )
+            except Exception as e_inside:  # noqa: BLE001
+                logger.error("[STEP2] [INSIDE BUBBLE] Final Result generation failed: %s", e_inside)
         except Exception as e:  # noqa: BLE001
             logger.error("[STEP2] Rectangles visualization failed: %s", e)
 
@@ -301,12 +336,13 @@ class ImageProcessingPipelineService:
                 ]
             ]
             (
-                _outside_metadata,
+                outside_metadata,
                 vis1_masks,
                 vis2_black_canvas,
                 vis3_filtered,
                 vis4_filtered_masks,
-                vis5_inpainted,
+                vis5_rectangle,
+                vis6_inpainted,
             ) = await self.text_detection_service.process_text_outside_bubbles(
                 cleaned_image,
                 text_boxes_outside,
@@ -327,7 +363,91 @@ class ImageProcessingPipelineService:
             _persist_vis(vis2_black_canvas, "outside_black_canvas", "[OUTSIDE] Use Black Canvas")
             _persist_vis(vis3_filtered, "outside_filtered_boxes", "[OUTSIDE] Apply Filter To Add Boxes Filter")
             _persist_vis(vis4_filtered_masks, "outside_filtered_masks", "[OUTSIDE] Remove Text Mask Filter Boxes And Return To Background")
-            _persist_vis(vis5_inpainted, "outside_inpainted", "[OUTSIDE] Clean Text Mask Using InPainting")
+            _persist_vis(vis5_rectangle, "outside_calculated_rectangle", "[OUTSIDE] Calculated Rectangle")
+            _persist_vis(vis6_inpainted, "outside_inpainted", "[OUTSIDE] Clean Text Mask Using InPainting")
+
+            # Generate combined OUTSIDE final result (inpainted + rectangles)
+            try:
+                if vis6_inpainted is not None:
+                    outside_final = vis6_inpainted.copy()
+                    # Draw rectangles from metadata if available
+                    for item in outside_metadata or []:
+                        box = item.get("box")
+                        if box and len(box) == 4:
+                            x1, y1, x2, y2 = box
+                            cv2.rectangle(
+                                outside_final,
+                                (x1, y1),
+                                (x2, y2),
+                                (0, 255, 0),
+                                3,
+                            )
+                            cv2.putText(
+                                outside_final,
+                                "BOX",
+                                (x1, max(0, y1 - 10)),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.7,
+                                (0, 255, 0),
+                                2,
+                                cv2.LINE_AA,
+                            )
+                    outside_final_path = save_temp_image(outside_final, "outside_final_result")
+                    ctx.visualizations["outside_final_result"] = f"/temp/{os.path.basename(outside_final_path)}"
+                    logger.info(
+                        "[STEP2] [OUTSIDE] Final Result: %s",
+                        ctx.visualizations["outside_final_result"],
+                    )
+                    # Persist accepted outside boxes metadata into context
+                    ctx.outside_final_boxes = outside_metadata or []
+                    # Generate combined INSIDE & OUTSIDE final result with numbering
+                    try:
+                        base_combined = vis6_inpainted.copy() if vis6_inpainted is not None else ctx.image_rgb.copy()
+                        # Collect inside rectangles (convert (x,y,w,h) -> (x1,y1,x2,y2))
+                        inside_rects = []
+                        for seg in refined_segments:
+                            for rect in getattr(seg, "rectangles", []):
+                                if len(rect) == 4:
+                                    x, y, w, h = rect
+                                    inside_rects.append([x, y, x + w, y + h])
+                        # Sort inside: top-to-bottom then left-to-right
+                        inside_rects_sorted = sorted(inside_rects, key=lambda r: (r[1], r[0]))
+                        # Outside boxes already [x1,y1,x2,y2]; sort similarly
+                        outside_boxes_sorted = sorted(
+                            [b["box"] for b in ctx.outside_final_boxes] if ctx.outside_final_boxes else [],
+                            key=lambda r: (r[1], r[0]),
+                        )
+                        # Numbering: inside first then outside
+                        counter = 1
+                        def _draw_numbered(box, color):
+                            nonlocal counter
+                            x1, y1, x2, y2 = map(int, box)
+                            cv2.rectangle(base_combined, (x1, y1), (x2, y2), color, 3)
+                            cv2.putText(
+                                base_combined,
+                                f"{counter}",
+                                (x1, max(0, y1 - 10)),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.8,
+                                color,
+                                2,
+                                cv2.LINE_AA,
+                            )
+                            counter += 1
+                        for box in inside_rects_sorted:
+                            _draw_numbered(box, (0, 255, 0))  # Green for inside
+                        for box in outside_boxes_sorted:
+                            _draw_numbered(box, (0, 165, 255))  # Orange for outside
+                        combined_path = save_temp_image(base_combined, "inside_outside_final_result")
+                        ctx.visualizations["inside_outside_final_result"] = f"/temp/{os.path.basename(combined_path)}"
+                        logger.info(
+                            "[STEP2] [INSIDE&OUTSIDE] Final Result: %s",
+                            ctx.visualizations["inside_outside_final_result"],
+                        )
+                    except Exception as e_comb:  # noqa: BLE001
+                        logger.error("[STEP2] [INSIDE&OUTSIDE] Final Result generation failed: %s", e_comb)
+            except Exception as e_outside:  # noqa: BLE001
+                logger.error("[STEP2] [OUTSIDE] Final Result generation failed: %s", e_outside)
 
     async def _run_ocr(self, ctx: ProcessingContext, result: ImageResult) -> None:
         """Execute OCR over bubble segments."""
@@ -338,6 +458,27 @@ class ImageProcessingPipelineService:
 
         ocr_results = await self.ocr_service.process_segments(ctx.image_rgb, ctx.segments)
         result.ocr_results = ocr_results
+
+        # Log inside OCR texts
+        inside_texts = [res.original_text for res in ocr_results]
+        if inside_texts:
+            logger.info("[STEP3] OCR Inside Texts: %s", inside_texts)
+        else:
+            logger.info("[STEP3] OCR Inside Texts: []")
+
+        # Log outside OCR texts (run OCR over accepted outside boxes if any)
+        try:
+            if ctx.outside_final_boxes:
+                outside_boxes_arr = np.array([b["box"] for b in ctx.outside_final_boxes], dtype=np.int32)
+                verified_boxes, outside_texts, _outside_conf = await self.ocr_service.verify_text_boxes(
+                    ctx.image_rgb, outside_boxes_arr
+                )
+                logger.info("[STEP3] OCR Outside Texts: %s", outside_texts if outside_texts else [])
+            else:
+                logger.info("[STEP3] OCR Outside Texts: []")
+        except Exception as e:  # noqa: BLE001
+            logger.error("[STEP3] OCR Outside Texts collection failed: %s", e)
+            logger.info("[STEP3] OCR Outside Texts: []")
 
 
 __all__ = ["ImageProcessingPipelineService"]
